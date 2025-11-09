@@ -1,0 +1,10966 @@
+// Add IndexedDB variables at the top
+let db = null;
+const DB_NAME = 'BillAppDB';
+
+const DB_VERSION = 5; // Changed from 4 to 5 to trigger upgrade
+let dbInitialized = false;
+let dbInitPromise = null;
+let isGSTMode = false;
+let gstCustomers = [];
+let gstSavedBills = [];
+let companyInfo = null;
+let currentGSTPercent = 18;
+let transactionType = 'intrastate'; // 'intrastate' or 'interstate'
+// Global variables for toggle states
+let currentCustomerMode = 'regular'; // 'regular' or 'gst'
+let currentBillsMode = 'regular'; // 'regular' or 'gst'
+let currentlyEditingSectionId = null;
+let currentAdjustTaxPercent = 0;
+let isGSTInclusive = false;
+let confirmResolve = null;
+let currentlyEditingPaymentId = null;
+let termsListItems = [];
+let termsListType = 'ul';
+let termsListStyle = 'disc';
+
+let discountAmount = 0;
+let discountPercent = 0;
+let gstPercent = 0;
+let autoApplyCustomerRates = true;
+
+// Edit mode variables
+let editMode = false;
+let currentEditingBillId = null;
+let currentEditingBillType = null; // 'regular' or 'gst'
+
+// Add this with other global variables
+let sectionModalState = {
+    align: 'left',
+    bgColor: '#ffe8b5',
+    fontColor: '#000000',
+    fontSize: '14',
+    textTransform: 'none',
+    paddingType: '',
+    paddingValue: ''
+};
+
+// IndexedDB initialization function
+function initDB() {
+    if (dbInitPromise) {
+        return dbInitPromise;
+    }
+
+    dbInitPromise = new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION); // Make sure DB_VERSION is incremented if needed
+
+        request.onerror = () => {
+            reject(request.error);
+        };
+
+        request.onsuccess = () => {
+            db = request.result;
+            dbInitialized = true;
+
+            db.onerror = (event) => {
+                console.error('Database error:', event.target.error);
+            };
+
+            db.onclose = () => {
+                dbInitialized = false;
+                dbInitPromise = null;
+            };
+
+            resolve(db);
+        };
+
+        request.onupgradeneeded = (event) => {
+            const database = event.target.result;
+
+            // Existing object stores
+            if (!database.objectStoreNames.contains('billDataManual')) {
+                database.createObjectStore('billDataManual', { keyPath: 'id' });
+            }
+            if (!database.objectStoreNames.contains('billHistoryManual')) {
+                database.createObjectStore('billHistoryManual', { keyPath: 'id' });
+            }
+            if (!database.objectStoreNames.contains('taxSettings')) {
+                database.createObjectStore('taxSettings', { keyPath: 'id' });
+            }
+            if (!database.objectStoreNames.contains('theme')) {
+                database.createObjectStore('theme', { keyPath: 'id' });
+            }
+            if (!database.objectStoreNames.contains('savedItems')) {
+                database.createObjectStore('savedItems', { keyPath: 'id' });
+            }
+            if (!database.objectStoreNames.contains('savedCustomers')) {
+                database.createObjectStore('savedCustomers', { keyPath: 'id' });
+            }
+            if (!database.objectStoreNames.contains('savedBills')) {
+                database.createObjectStore('savedBills', { keyPath: 'id' });
+            }
+            if (!database.objectStoreNames.contains('gstCustomers')) {
+                database.createObjectStore('gstCustomers', { keyPath: 'id' });
+            }
+            if (!database.objectStoreNames.contains('gstSavedBills')) {
+                database.createObjectStore('gstSavedBills', { keyPath: 'id' });
+            }
+            if (!database.objectStoreNames.contains('companyInfo')) {
+                database.createObjectStore('companyInfo', { keyPath: 'id' });
+            }
+            if (!database.objectStoreNames.contains('gstMode')) {
+                database.createObjectStore('gstMode', { keyPath: 'id' });
+            }
+
+            // NEW: Add payment and credit note object stores
+            if (!database.objectStoreNames.contains('customerPayments')) {
+                database.createObjectStore('customerPayments', { keyPath: 'id' });
+            }
+            if (!database.objectStoreNames.contains('customerCreditNotes')) {
+                database.createObjectStore('customerCreditNotes', { keyPath: 'id' });
+            }
+
+            // ADD THIS: Create settings object store
+            if (!database.objectStoreNames.contains('settings')) {
+                database.createObjectStore('settings', { keyPath: 'id' });
+            }
+        };
+
+        request.onblocked = () => {
+            console.log('Database blocked - waiting for other connections to close');
+        };
+    });
+
+    return dbInitPromise;
+}
+
+async function ensureDBInitialized() {
+    if (!dbInitialized && !dbInitPromise) {
+        await initDB();
+    } else if (dbInitPromise) {
+        await dbInitPromise;
+    }
+
+    if (db && (db.readyState === 'closed' || !db.objectStoreNames)) {
+        dbInitialized = false;
+        dbInitPromise = null;
+        await initDB();
+    }
+}
+
+async function getFromDB(storeName, key) {
+    await ensureDBInitialized();
+
+    return new Promise((resolve, reject) => {
+        if (!db) {
+            reject(new Error('Database not initialized'));
+            return;
+        }
+
+        try {
+            const transaction = db.transaction([storeName], 'readonly');
+            const store = transaction.objectStore(storeName);
+            const request = store.get(key);
+
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => resolve(request.result ? request.result.value : null);
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
+
+async function setInDB(storeName, key, value) {
+    await ensureDBInitialized();
+
+    return new Promise((resolve, reject) => {
+        if (!db) {
+            reject(new Error('Database not initialized'));
+            return;
+        }
+
+        try {
+            const transaction = db.transaction([storeName], 'readwrite');
+            const store = transaction.objectStore(storeName);
+            const request = store.put({ id: key, value: value });
+
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => resolve();
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
+
+async function removeFromDB(storeName, key) {
+    await ensureDBInitialized();
+
+    return new Promise((resolve, reject) => {
+        if (!db) {
+            reject(new Error('Database not initialized'));
+            return;
+        }
+
+        try {
+            const transaction = db.transaction([storeName], 'readwrite');
+            const store = transaction.objectStore(storeName);
+            const request = store.delete(key);
+
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => resolve();
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
+
+
+// Save payment/credit note
+async function savePaymentRecord(customerName, gstin, paymentData, type = 'payment') {
+    const storeName = type === 'payment' ? 'customerPayments' : 'customerCreditNotes';
+    const recordId = `${type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    const record = {
+        id: recordId,
+        customerName: customerName,
+        gstin: gstin,
+        date: paymentData.date,
+        method: paymentData.method,
+        amount: parseFloat(paymentData.amount),
+        notes: paymentData.notes || '',
+        timestamp: Date.now(),
+        type: type
+    };
+
+    await setInDB(storeName, recordId, record);
+    return recordId;
+}
+// Toggle auto-apply customer rates
+async function toggleAutoApplyRates() {
+    try {
+        autoApplyCustomerRates = !autoApplyCustomerRates;
+        updateAutoApplyButton();
+        showNotification(`Auto-apply customer rates: ${autoApplyCustomerRates ? 'ON' : 'OFF'}`, 'info', 2000);
+
+        // Save the setting to DB with error handling
+        try {
+            await setInDB('settings', 'autoApplyCustomerRates', autoApplyCustomerRates);
+        } catch (error) {
+            console.warn('Could not save auto-apply setting (settings store may not exist):', error);
+            // Continue without saving - the setting will work for current session
+        }
+    } catch (error) {
+        console.error('Error toggling auto-apply rates:', error);
+    }
+}
+
+// Update the button appearance
+function updateAutoApplyButton() {
+    const button = document.querySelector('.auto-apply-rates-btn');
+    if (button) {
+        if (autoApplyCustomerRates) {
+            button.style.backgroundColor = '#27ae60';
+            button.innerHTML = '<span class="material-icons">auto_awesome</span>AUTO RATES: ON';
+        } else {
+            button.style.backgroundColor = '';
+            button.innerHTML = '<span class="material-icons">auto_awesome</span>AUTO RATES: OFF';
+        }
+    }
+}
+
+// Load auto-apply setting on startup
+async function loadAutoApplySetting() {
+    try {
+        // Check if settings store exists first
+        await ensureDBInitialized();
+
+        if (db && db.objectStoreNames.contains('settings')) {
+            const setting = await getFromDB('settings', 'autoApplyCustomerRates');
+            autoApplyCustomerRates = setting !== false; // Default to true if not set
+        } else {
+            // Settings store doesn't exist, use default
+            autoApplyCustomerRates = true;
+        }
+        updateAutoApplyButton();
+    } catch (error) {
+        console.warn('Error loading auto-apply setting, using default:', error);
+        autoApplyCustomerRates = true;
+        updateAutoApplyButton();
+    }
+}
+
+// Customer Rate Suggestion System
+async function getCustomerRateSuggestion(customerName, itemName) {
+    try {
+        if (!customerName || !itemName) return null;
+
+        // Search in regular saved bills
+        const regularBills = await getAllFromDB('savedBills');
+        let suggestedRate = null;
+        let latestTimestamp = 0;
+
+        // Search through all regular bills for this customer
+        regularBills.forEach(bill => {
+            if (bill.value.customer?.name === customerName && bill.value.tableStructure) {
+                bill.value.tableStructure.forEach(row => {
+                    if (row.type === 'item' &&
+                        row.itemName.toLowerCase() === itemName.toLowerCase() &&
+                        row.rate > 0 &&
+                        bill.value.timestamp > latestTimestamp) {
+
+                        suggestedRate = row.rate;
+                        latestTimestamp = bill.value.timestamp;
+                    }
+                });
+            }
+        });
+
+        // Also search in GST bills if no match found
+        if (!suggestedRate) {
+            const gstBills = await getAllFromDB('gstSavedBills');
+            gstBills.forEach(bill => {
+                const billCustomerName = bill.value.customer?.billTo?.name;
+                if (billCustomerName === customerName && bill.value.items) {
+                    bill.value.items.forEach(item => {
+                        if (item.itemName.toLowerCase() === itemName.toLowerCase() &&
+                            item.rate > 0 &&
+                            bill.value.timestamp > latestTimestamp) {
+
+                            suggestedRate = parseFloat(item.rate);
+                            latestTimestamp = bill.value.timestamp;
+                        }
+                    });
+                }
+            });
+        }
+
+        return suggestedRate;
+    } catch (error) {
+        console.error('Error getting customer rate suggestion:', error);
+        return null;
+    }
+}
+
+// Sync rates to all tables (input, bill view, GST view)
+function syncRateToOtherTables(itemId, newRate, newAmount) {
+    // Sync to regular bill table (copyListManual)
+    const copyRow = document.querySelector(`#copyListManual tr[data-id="${itemId}"]`);
+    if (copyRow) {
+        const cells = copyRow.children;
+        cells[4].textContent = parseFloat(newRate).toFixed(2);
+        cells[5].textContent = parseFloat(newAmount).toFixed(2);
+    }
+
+    // Sync to GST table if in GST mode
+    if (isGSTMode) {
+        const gstRow = document.querySelector(`#gstCopyListManual tr[data-id="${itemId}"]`);
+        if (gstRow) {
+            const cells = gstRow.children;
+            cells[5].textContent = parseFloat(newRate).toFixed(2); // Rate column in GST table
+            cells[6].textContent = parseFloat(newAmount).toFixed(2); // Amount column in GST table
+        }
+    }
+}
+
+// Check and apply customer-specific rates to existing items (SYNCED VERSION)
+async function checkAndApplyCustomerRates(customerName) {
+    if (!autoApplyCustomerRates) {
+        return;
+    }
+
+    try {
+        const items = document.querySelectorAll('#createListManual tbody tr[data-id]');
+        let appliedRatesCount = 0;
+
+        for (const row of items) {
+            const cells = row.children;
+            const particularsDiv = cells[1];
+            const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim();
+
+            if (itemName) {
+                const suggestedRate = await getCustomerRateSuggestion(customerName, itemName);
+                if (suggestedRate) {
+                    // Update the rate in the input table
+                    cells[4].textContent = parseFloat(suggestedRate).toFixed(2);
+
+                    // Recalculate amount
+                    const quantity = parseFloat(row.getAttribute('data-original-quantity') || cells[2].textContent);
+                    const dimensionType = row.getAttribute('data-dimension-type') || 'none';
+
+                    let finalQuantity = quantity;
+                    if (dimensionType !== 'none' && dimensionType !== 'dozen') {
+                        const dimensionValues = JSON.parse(row.getAttribute('data-dimension-values') || '[0,0,0]');
+                        const calculatedArea = calculateAreaFromDimensions(dimensionType, dimensionValues);
+                        finalQuantity = quantity * calculatedArea;
+                    } else if (dimensionType === 'dozen') {
+                        finalQuantity = quantity / 12;
+                    }
+
+                    const newAmount = finalQuantity * suggestedRate;
+                    cells[5].textContent = newAmount.toFixed(2);
+
+                    // Update data attributes (THIS PERSISTS THE RATES)
+                    row.setAttribute('data-rate', suggestedRate.toFixed(8));
+                    row.setAttribute('data-amount', newAmount.toFixed(8));
+
+                    // SYNC TO BILL VIEW TABLES
+                    syncRateToOtherTables(row.getAttribute('data-id'), suggestedRate, newAmount);
+
+                    appliedRatesCount++;
+                }
+            }
+        }
+
+        // Update totals after applying rates
+        updateTotal();
+        if (isGSTMode) {
+            updateGSTTaxCalculation();
+        }
+
+        // Save to localStorage to persist the changes
+        await saveToLocalStorage();
+
+        // Show notification only once if rates were applied
+        if (appliedRatesCount > 0) {
+            showNotification(`Applied previous rates for ${customerName} (${appliedRatesCount} items)`, 'info', 3000);
+        }
+
+    } catch (error) {
+        console.error('Error applying customer rates:', error);
+    }
+}
+
+// Get customer payments/credit notes
+async function getCustomerPayments(customerName, gstin, type = 'payment', filters = {}) {
+    const storeName = type === 'payment' ? 'customerPayments' : 'customerCreditNotes';
+
+    try {
+        const allRecords = await getAllFromDB(storeName);
+
+        // If no records exist yet, return empty array
+        if (!allRecords || allRecords.length === 0) {
+            return [];
+        }
+
+        let records = allRecords.filter(record => {
+            // Match by GSTIN if available, otherwise by name
+            if (gstin && record.value.gstin) {
+                return record.value.gstin === gstin && record.value.type === type;
+            } else {
+                return record.value.customerName === customerName && record.value.type === type;
+            }
+        }).map(record => record.value);
+
+        // Apply filters
+        records = applyPaymentFilters(records, filters);
+
+        return records;
+    } catch (error) {
+        console.error(`Error getting ${type} records:`, error);
+        return [];
+    }
+}
+
+// Apply filters to payments/credit notes
+function applyPaymentFilters(records, filters) {
+    let filtered = [...records];
+
+    // Search filter
+    if (filters.search) {
+        const searchTerm = filters.search.toLowerCase();
+        filtered = filtered.filter(record =>
+            record.method.toLowerCase().includes(searchTerm) ||
+            record.amount.toString().includes(searchTerm) ||
+            record.date.includes(searchTerm) ||
+            (record.notes && record.notes.toLowerCase().includes(searchTerm))
+        );
+    }
+
+    // Date range filter
+    if (filters.startDate && filters.endDate) {
+        filtered = filtered.filter(record =>
+            record.date >= filters.startDate && record.date <= filters.endDate
+        );
+    }
+
+    // Statement period filter
+    if (filters.period && filters.period !== 'all') {
+        const today = new Date();
+        let startDate = new Date();
+
+        switch (filters.period) {
+            case '1month':
+                startDate.setMonth(today.getMonth() - 1);
+                break;
+            case '3months':
+                startDate.setMonth(today.getMonth() - 3);
+                break;
+            case '6months':
+                startDate.setMonth(today.getMonth() - 6);
+                break;
+        }
+
+        const startDateStr = startDate.toISOString().split('T')[0];
+        filtered = filtered.filter(record => record.date >= startDateStr);
+    }
+
+    // Sort
+    const sortBy = filters.sortBy || 'date';
+    const sortOrder = filters.sortOrder || 'desc';
+
+    filtered.sort((a, b) => {
+        let aValue, bValue;
+
+        if (sortBy === 'date') {
+            aValue = new Date(a.date);
+            bValue = new Date(b.date);
+        } else if (sortBy === 'amount') {
+            aValue = parseFloat(a.amount);
+            bValue = parseFloat(b.amount);
+        }
+
+        if (sortOrder === 'asc') {
+            return aValue - bValue;
+        } else {
+            return bValue - aValue;
+        }
+    });
+
+    return filtered;
+}
+
+// Delete payment/credit note
+async function deletePaymentRecord(recordId, type = 'payment') {
+    const storeName = type === 'payment' ? 'customerPayments' : 'customerCreditNotes';
+    await removeFromDB(storeName, recordId);
+}
+
+async function loadGSTCustomers() {
+    try {
+        const customers = await getAllFromDB('gstCustomers');
+        gstCustomers = customers.map(c => c.value);
+    } catch (error) {
+        console.error('Error loading GST customers:', error);
+        gstCustomers = [];
+    }
+}
+
+async function getAllFromDB(storeName) {
+    await ensureDBInitialized();
+
+    return new Promise((resolve, reject) => {
+        if (!db) {
+            reject(new Error('Database not initialized'));
+            return;
+        }
+
+        try {
+            // Check if the object store exists
+            if (!db.objectStoreNames.contains(storeName)) {
+                console.warn(`Object store '${storeName}' does not exist, returning empty array`);
+                resolve([]);
+                return;
+            }
+
+            const transaction = db.transaction([storeName], 'readonly');
+            const store = transaction.objectStore(storeName);
+            const request = store.getAll();
+
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => resolve(request.result);
+        } catch (error) {
+            console.error(`Error accessing store '${storeName}':`, error);
+            resolve([]); // Return empty array instead of rejecting
+        }
+    });
+}
+
+// Notification System
+function showNotification(message, type = 'info', duration = 2000) {
+    const container = document.getElementById('notification-container');
+    const notification = document.createElement('div');
+    notification.className = `notification ${type}`;
+    notification.textContent = message;
+
+    container.appendChild(notification);
+
+    // Auto remove after duration
+    setTimeout(() => {
+        notification.classList.add('fade-out');
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 300);
+    }, duration);
+
+    return notification;
+}
+
+// Custom Confirm Dialog
+function showConfirm(message) {
+    return new Promise((resolve) => {
+        const dialog = document.getElementById('confirm-dialog');
+        const messageEl = document.getElementById('confirm-message');
+        const yesBtn = document.getElementById('confirm-yes');
+        const noBtn = document.getElementById('confirm-no');
+
+        messageEl.textContent = message;
+        confirmResolve = resolve;
+
+        dialog.classList.add('active');
+
+        // Remove previous event listeners
+        yesBtn.onclick = null;
+        noBtn.onclick = null;
+
+        // Add new event listeners
+        yesBtn.onclick = () => {
+            dialog.classList.remove('active');
+            confirmResolve(true);
+        };
+
+        noBtn.onclick = () => {
+            dialog.classList.remove('active');
+            confirmResolve(false);
+        };
+    });
+}
+
+// Close confirm dialog when clicking outside
+document.getElementById('confirm-dialog').addEventListener('click', function (e) {
+    if (e.target === this) {
+        this.classList.remove('active');
+        if (confirmResolve) {
+            confirmResolve(false);
+        }
+    }
+});
+
+function handleDiscountTypeChange() {
+    const type = document.getElementById('discount-type-select').value;
+    const percentGroup = document.getElementById('percent-input-group');
+    const amountGroup = document.getElementById('amount-input-group');
+
+    // Hide both initially
+    percentGroup.style.display = 'none';
+    amountGroup.style.display = 'none';
+
+    // Show relevant input
+    if (type === 'percent') {
+        percentGroup.style.display = 'flex';
+    } else if (type === 'amount') {
+        amountGroup.style.display = 'flex';
+    }
+}
+
+// Get current subtotal for discount calculations
+function getCurrentSubtotal() {
+    if (isGSTMode) {
+        // Get from actual stored items, not displayed total
+        const items = document.querySelectorAll('#createListManual tbody tr[data-id]');
+        let subtotal = 0;
+
+        items.forEach(row => {
+            const amount = parseFloat(row.getAttribute('data-amount')) || 0;
+            subtotal = storeWithPrecision(subtotal + amount);
+        });
+
+        return subtotal;
+    } else {
+        // Get from actual stored items, not displayed total
+        const items = document.querySelectorAll('#createListManual tbody tr[data-id]');
+        let subtotal = 0;
+
+        items.forEach(row => {
+            const amount = parseFloat(row.getAttribute('data-amount')) || 0;
+            subtotal = storeWithPrecision(subtotal + amount);
+        });
+
+        return subtotal;
+    }
+}
+
+function toggleDiscountInputs() {
+    const container = document.getElementById('discount-inputs-container');
+    const button = document.getElementById('toggleDiscountBtn');
+
+    if (container.style.display === 'none') {
+        container.style.display = 'flex';
+        button.style.backgroundColor = '#27ae60'; // Green when active
+    } else {
+        container.style.display = 'none';
+        button.style.backgroundColor = ''; // Reset to default
+    }
+}
+
+function toggleDimensionInputs() {
+    const container = document.getElementById('dimension-inputs-container');
+    const button = document.getElementById('toggleDimensionBtn');
+
+    if (container.style.display === 'none') {
+        container.style.display = 'flex';
+        button.style.backgroundColor = '#3498db'; // Blue when active
+    } else {
+        container.style.display = 'none';
+        button.style.backgroundColor = ''; // Reset to default
+    }
+}
+
+let rowCounterManual = 1;
+let currentlyEditingRowIdManual = null;
+let historyStackManual = [];
+let historyIndexManual = -1;
+let rateColumnHidden = false;
+let currentView = 'input';
+let showDimensions = true;
+
+const themes = ['blue', 'green', 'red', 'purple', 'orange', 'dark'];
+let currentThemeIndex = 0;
+
+
+// let discountPercent = 0;
+// let gstPercent = 0;
+
+let currentDimensions = {
+    type: 'none',
+    unit: 'ft',
+    values: [0, 0, 0],
+    calculatedArea: 0
+};
+
+let currentlyEditingItemId = null;
+let currentlyEditingCustomerId = null;
+
+function getModeSpecificVars() {
+    return {
+        rowCounter: rowCounterManual,
+        currentlyEditingRowId: currentlyEditingRowIdManual,
+        historyStack: historyStackManual,
+        historyIndex: historyIndexManual,
+        createListId: 'createListManual',
+        copyListId: 'copyListManual',
+        totalAmountId: 'createTotalAmountManual',
+        copyTotalAmountId: 'copyTotalAmount',
+        localStorageKey: 'billDataManual',
+        historyStorageKey: 'billHistoryManual',
+        addRowFunc: addRowManual,
+        updateRowFunc: updateRowManual,
+        editRowFunc: editRowManual,
+        removeRowFunc: removeRowManual
+    };
+}
+
+function toggleSettingsSidebar() {
+    const sidebar = document.getElementById("settings-sidebar");
+    const overlay = document.getElementById("settings-overlay");
+    sidebar.classList.toggle("open");
+    overlay.classList.toggle("open");
+}
+
+document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') {
+        const settingsSidebar = document.getElementById("settings-sidebar");
+        if (settingsSidebar.classList.contains("open")) {
+            toggleSettingsSidebar();
+        }
+    }
+});
+
+document.addEventListener('DOMContentLoaded', async function () {
+    try {
+        await initDB();
+        await loadFromLocalStorage();
+        await loadHistoryFromLocalStorage();
+        await loadSavedTheme();
+        await loadTaxSettings();
+        // await loadSavedItems();
+        await loadSavedCustomers();
+
+        // Load GST mode settings
+        const gstModeSetting = await getFromDB('gstMode', 'isGSTMode');
+        isGSTMode = gstModeSetting || false;
+        await loadCompanyInfo();
+        await loadGSTCustomers();
+
+        updateUIForGSTMode();
+        saveStateToHistory();
+
+        // ADD THIS: Fix profit state after page refresh
+        restoreProfitStateAfterRefresh();
+
+        // FIXED: Safe date initialization
+        const dateInput = document.getElementById('billDate');
+        if (dateInput && !dateInput.value) {
+            const today = new Date();
+            const day = String(today.getDate()).padStart(2, '0');
+            const month = String(today.getMonth() + 1).padStart(2, '0');
+            const year = today.getFullYear();
+            dateInput.value = `${day}-${month}-${year}`;
+            initializeDateInputs();
+            saveToLocalStorage();
+        }
+
+        // Initialize payment and ledger systems
+        setupPaymentDialog();
+
+        // FIXED: Safe ledger period initialization
+        const fromDateInput = document.getElementById('from-date-input');
+        if (fromDateInput) {
+            // Set default from date to 3 months ago for "From Date" option
+            const threeMonthsAgo = new Date();
+            threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+            fromDateInput.value = threeMonthsAgo.toISOString().split('T')[0];
+        }
+
+        // FIXED: Safe select all dates event listener
+        const selectAllDates = document.getElementById('select-all-dates');
+        if (selectAllDates) {
+            selectAllDates.addEventListener('change', handleSelectAllChange);
+        }
+
+        // Close payment dialog
+        const closePaymentBtn = document.getElementById('close-payment-dialog');
+        if (closePaymentBtn) {
+            closePaymentBtn.addEventListener('click', closePaymentDialog);
+        }
+
+        // Close ledger dialog
+        const closeLedgerBtn = document.getElementById('close-ledger-dialog');
+        if (closeLedgerBtn) {
+            closeLedgerBtn.addEventListener('click', closeLedgerDialog);
+        }
+
+        // Setup payment type toggle
+        setupPaymentTypeToggle();
+
+        // Close dialogs when clicking outside
+        const paymentDialog = document.getElementById('payment-dialog');
+        if (paymentDialog) {
+            paymentDialog.addEventListener('click', function (e) {
+                if (e.target === this) closePaymentDialog();
+            });
+        }
+
+        const ledgerDialog = document.getElementById('ledger-dialog');
+        if (ledgerDialog) {
+            ledgerDialog.addEventListener('click', function (e) {
+                if (e.target === this) closeLedgerDialog();
+            });
+        }
+
+        // Close purchase price dialog
+        const closePurchaseBtn = document.getElementById('close-purchase-dialog');
+        if (closePurchaseBtn) {
+            closePurchaseBtn.addEventListener('click', closePurchasePriceDialog);
+        }
+
+        // Close purchase dialog when clicking outside
+        const purchaseDialog = document.getElementById('purchase-price-dialog');
+        if (purchaseDialog) {
+            purchaseDialog.addEventListener('click', function (e) {
+                if (e.target === this) closePurchasePriceDialog();
+            });
+        }
+
+        // Validate purchase price inputs on change
+        document.addEventListener('input', function (e) {
+            if (e.target.classList.contains('purchase-price-input')) {
+                const value = parseFloat(e.target.value) || 0;
+                if (value > 0) {
+                    e.target.style.borderColor = '';
+                }
+            }
+        });
+
+        // UPDATED DIMENSION INPUT EVENT LISTENERS
+        // Real-time calculation without formatting during typing
+        const dimension1 = document.getElementById('dimension1');
+        if (dimension1) {
+            dimension1.addEventListener('input', function () {
+                currentDimensions.values[0] = parseFloat(this.value) || 0;
+                calculateDimensions();
+            });
+            dimension1.addEventListener('blur', function () {
+                if (this.value) {
+                    this.value = parseFloat(this.value).toFixed(2);
+                    currentDimensions.values[0] = parseFloat(this.value);
+                    calculateDimensions();
+                }
+            });
+        }
+
+        const dimension2 = document.getElementById('dimension2');
+        if (dimension2) {
+            dimension2.addEventListener('input', function () {
+                currentDimensions.values[1] = parseFloat(this.value) || 0;
+                calculateDimensions();
+            });
+            dimension2.addEventListener('blur', function () {
+                if (this.value) {
+                    this.value = parseFloat(this.value).toFixed(2);
+                    currentDimensions.values[1] = parseFloat(this.value);
+                    calculateDimensions();
+                }
+            });
+        }
+
+        const dimension3 = document.getElementById('dimension3');
+        if (dimension3) {
+            dimension3.addEventListener('input', function () {
+                currentDimensions.values[2] = parseFloat(this.value) || 0;
+                calculateDimensions();
+            });
+            dimension3.addEventListener('blur', function () {
+                if (this.value) {
+                    this.value = parseFloat(this.value).toFixed(2);
+                    currentDimensions.values[2] = parseFloat(this.value);
+                    calculateDimensions();
+                }
+            });
+        }
+
+        // Customer name event listeners
+        const custName = document.getElementById('custName');
+        if (custName) {
+            custName.addEventListener('input', async function () {
+                const customerName = this.value.trim();
+                if (customerName) {
+                    // Store current customer name for rate suggestions
+                    window.currentCustomer = customerName;
+
+                    // Check if we should auto-fill rates for existing items
+                    await checkAndApplyCustomerRates(customerName);
+                }
+            });
+        }
+
+        // Add customer rate suggestion listeners
+        if (custName) {
+            custName.addEventListener('input', async function () {
+                const customerName = this.value.trim();
+                if (customerName) {
+                    // Store current customer name for rate suggestions
+                    window.currentCustomer = customerName;
+
+                    // FIX: Only auto-fill rates if auto-apply is ON
+                    if (autoApplyCustomerRates) {
+                        await checkAndApplyCustomerRates(customerName);
+                    }
+                }
+            });
+        }
+
+        // Add click handler for existing terms
+        document.addEventListener('click', function (e) {
+            const termsDiv = e.target.closest('.bill-footer-list[data-editable="true"]');
+            if (termsDiv) {
+                e.preventDefault();
+                e.stopPropagation();
+                editExistingTerms(termsDiv);
+            }
+        });
+
+        // Add event delegation for dynamically created ledger and payment buttons
+        document.addEventListener('click', function (e) {
+            // Handle ledger buttons
+            if (e.target.classList.contains('btn-ledger') || e.target.closest('.btn-ledger')) {
+                const button = e.target.classList.contains('btn-ledger') ? e.target : e.target.closest('.btn-ledger');
+                const customerName = button.getAttribute('data-customer-name');
+                const gstin = button.getAttribute('data-gstin');
+
+                if (customerName) {
+                    openLedgerDialog(customerName, gstin);
+                }
+            }
+
+            // auto select cgst or igst
+            document.getElementById('consignee-gst').addEventListener('input', function () {
+                const consigneeGST = this.value.trim();
+                const companyGST = document.getElementById('company-gst').value.trim();
+
+                if (consigneeGST.length >= 2 && companyGST.length >= 2) {
+                    const consigneeStateCode = consigneeGST.substring(0, 2);
+                    const companyStateCode = companyGST.substring(0, 2);
+
+                    const transactionTypeSelect = document.getElementById('transaction_type');
+                    if (consigneeStateCode !== companyStateCode) {
+                        transactionTypeSelect.value = 'interstate';
+                    } else {
+                        transactionTypeSelect.value = 'intrastate';
+                    }
+                }
+            });
+
+            // Handle payment buttons
+            if (e.target.classList.contains('btn-payment') || e.target.closest('.btn-payment')) {
+                const button = e.target.classList.contains('btn-payment') ? e.target : e.target.closest('.btn-payment');
+                const customerName = button.getAttribute('data-customer-name');
+                const gstin = button.getAttribute('data-gstin');
+
+                if (customerName) {
+                    openPaymentDialog(customerName, gstin);
+                }
+            }
+        });
+
+        // Item name input listener
+        const itemNameManual = document.getElementById('itemNameManual');
+        if (itemNameManual) {
+            itemNameManual.addEventListener('input', handleItemNameInput);
+        }
+
+        // Add this to your DOMContentLoaded function
+        await loadAutoApplySetting();
+        // Load customer dialog state
+        await loadCustomerDialogState();
+        setupCustomerDialogAutoSave();
+
+    } catch (error) {
+        console.error('Error during initialization:', error);
+    }
+});
+function initializeDateInputs() {
+    const today = new Date();
+    const day = String(today.getDate()).padStart(2, '0');
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const year = today.getFullYear();
+    const todayFormatted = `${day}-${month}-${year}`;
+
+    // Set today's date for all date inputs
+    const dateInputs = [
+        'billDate',
+        'invoice-date',
+        'payment-date',
+        'from-date',
+        'to-date'
+    ];
+
+    dateInputs.forEach(inputId => {
+        const input = document.getElementById(inputId);
+        if (input && !input.value) {
+            input.value = todayFormatted;
+        }
+    });
+}
+
+
+
+function handleDimensionTypeChange() {
+    const dimensionType = document.getElementById('dimensionType').value;
+    const measurementUnit = document.getElementById('measurementUnit');
+    const dimensionInputs = document.getElementById('dimensionInputs');
+    const dim1 = document.getElementById('dimension1');
+    const dim2 = document.getElementById('dimension2');
+    const dim3 = document.getElementById('dimension3');
+    const dim1Toggle = document.getElementById('dimension1-toggle');
+    const dim2Toggle = document.getElementById('dimension2-toggle');
+    const dim3Toggle = document.getElementById('dimension3-toggle');
+
+    currentDimensions.type = dimensionType;
+
+    // Reset values only if they're not already set from saved item
+    if (!dim1.value) dim1.value = '';
+    if (!dim2.value) dim2.value = '';
+    if (!dim3.value) dim3.value = '';
+
+    // Reset all toggles to checked
+    dim1Toggle.checked = true;
+    dim2Toggle.checked = true;
+    dim3Toggle.checked = true;
+
+    if (dimensionType === 'none') {
+        measurementUnit.style.display = 'none';
+        dimensionInputs.style.display = 'none';
+    } else if (dimensionType === 'dozen') {
+        measurementUnit.style.display = 'none';
+        dimensionInputs.style.display = 'none';
+        const quantityInput = document.getElementById('quantityManual');
+        if (quantityInput.value) {
+            const quantity = parseFloat(quantityInput.value);
+            quantityInput.value = (quantity / 12).toFixed(2);
+        }
+    } else {
+        measurementUnit.style.display = 'inline-block';
+        dimensionInputs.style.display = 'flex';
+
+        // Show/hide appropriate inputs based on dimension type
+        const inputs = document.querySelectorAll('#dimensionInputs .dimension-input-with-toggle');
+        inputs.forEach(input => input.style.display = 'none');
+
+        // Show first input for all types
+        inputs[0].style.display = 'flex';
+        dim1.style.display = 'inline-block';
+
+        // Set placeholders based on dimension type
+        switch (dimensionType) {
+            case 'length':
+                dim1.placeholder = 'Length';
+                break;
+            case 'widthXheight':
+                inputs[1].style.display = 'flex';
+                dim1.placeholder = 'Width';
+                dim2.placeholder = 'Height';
+                break;
+            case 'widthXheightXdepth':
+                inputs[1].style.display = 'flex';
+                inputs[2].style.display = 'flex';
+                dim1.placeholder = 'Width';
+                dim2.placeholder = 'Height';
+                dim3.placeholder = 'Depth';
+                break;
+            case 'lengthXwidthXheight':
+                inputs[1].style.display = 'flex';
+                inputs[2].style.display = 'flex';
+                dim1.placeholder = 'Length';
+                dim2.placeholder = 'Width';
+                dim3.placeholder = 'Height';
+                break;
+            case 'widthXdepth':
+                inputs[1].style.display = 'flex';
+                dim1.placeholder = 'Width';
+                dim2.placeholder = 'Depth';
+                break;
+            case 'lengthXheightXdepth':
+                inputs[1].style.display = 'flex';
+                inputs[2].style.display = 'flex';
+                dim1.placeholder = 'Length';
+                dim2.placeholder = 'Height';
+                dim3.placeholder = 'Depth';
+                break;
+            case 'lengthXdepth':
+                inputs[1].style.display = 'flex';
+                dim1.placeholder = 'Length';
+                dim2.placeholder = 'Depth';
+                break;
+            case 'lengthXheight':
+                inputs[1].style.display = 'flex';
+                dim1.placeholder = 'Length';
+                dim2.placeholder = 'Height';
+                break;
+            case 'lengthXwidth':
+                inputs[1].style.display = 'flex';
+                dim1.placeholder = 'Length';
+                dim2.placeholder = 'Width';
+                break;
+            case 'lengthXwidthXdepth':
+                inputs[1].style.display = 'flex';
+                inputs[2].style.display = 'flex';
+                dim1.placeholder = 'Length';
+                dim2.placeholder = 'Width';
+                dim3.placeholder = 'Depth';
+                break;
+        }
+    }
+
+    calculateDimensions();
+}
+// Add function to update dimension calculation based on toggles
+function updateDimensionCalculation() {
+    calculateDimensions();
+}
+
+function handleMeasurementUnitChange() {
+    const newUnit = document.getElementById('measurementUnit').value;
+    const oldUnit = currentDimensions.unit;
+
+    if (oldUnit !== newUnit) {
+        convertDimensions(oldUnit, newUnit);
+    }
+
+    currentDimensions.unit = newUnit;
+    calculateDimensions();
+}
+
+function convertDimensions(fromUnit, toUnit) {
+    const conversionFactors = {
+        ft: { inch: 12, mtr: 0.3048, cm: 30.48, mm: 304.8 },
+        inch: { ft: 1 / 12, mtr: 0.0254, cm: 2.54, mm: 25.4 },
+        mtr: { ft: 3.28084, inch: 39.3701, cm: 100, mm: 1000 },
+        cm: { ft: 0.0328084, inch: 0.393701, mtr: 0.01, mm: 10 },
+        mm: { ft: 0.00328084, inch: 0.0393701, mtr: 0.001, cm: 0.1 }
+    };
+
+    const factor = conversionFactors[fromUnit][toUnit];
+
+    const dim1 = document.getElementById('dimension1');
+    const dim2 = document.getElementById('dimension2');
+    const dim3 = document.getElementById('dimension3');
+
+    if (dim1.value) {
+        dim1.value = (parseFloat(dim1.value) * factor).toFixed(4);
+        currentDimensions.values[0] = parseFloat(dim1.value);
+    }
+    if (dim2.value && dim2.style.display !== 'none') {
+        dim2.value = (parseFloat(dim2.value) * factor).toFixed(4);
+        currentDimensions.values[1] = parseFloat(dim2.value);
+    }
+    if (dim3.value && dim3.style.display !== 'none') {
+        dim3.value = (parseFloat(dim3.value) * factor).toFixed(4);
+        currentDimensions.values[2] = parseFloat(dim3.value);
+    }
+}
+
+function calculateDimensions() {
+    const dim1 = document.getElementById('dimension1');
+    const dim2 = document.getElementById('dimension2');
+    const dim3 = document.getElementById('dimension3');
+    const dim1Toggle = document.getElementById('dimension1-toggle');
+    const dim2Toggle = document.getElementById('dimension2-toggle');
+    const dim3Toggle = document.getElementById('dimension3-toggle');
+
+    // Convert input values to numbers and update currentDimensions
+    // BUT DON'T FORMAT THEM HERE - keep raw input for typing
+    if (dim1.value) currentDimensions.values[0] = parseFloat(dim1.value) || 0;
+    if (dim2.value && dim2.style.display !== 'none') currentDimensions.values[1] = parseFloat(dim2.value) || 0;
+    if (dim3.value && dim3.style.display !== 'none') currentDimensions.values[2] = parseFloat(dim3.value) || 0;
+
+    let calculatedValue = 0;
+    const [v1, v2, v3] = currentDimensions.values;
+
+    // Apply toggle states - if unchecked, use 1 (no effect on multiplication)
+    const effectiveV1 = dim1Toggle.checked ? v1 : 1;
+    const effectiveV2 = dim2Toggle.checked ? v2 : 1;
+    const effectiveV3 = dim3Toggle.checked ? v3 : 1;
+
+    switch (currentDimensions.type) {
+        case 'length':
+            calculatedValue = effectiveV1;
+            break;
+        case 'widthXheight':
+            calculatedValue = effectiveV1 * effectiveV2;
+            break;
+        case 'widthXheightXdepth':
+            calculatedValue = effectiveV1 * effectiveV2 * effectiveV3;
+            break;
+        case 'lengthXwidthXheight':
+            calculatedValue = effectiveV1 * effectiveV2 * effectiveV3;
+            break;
+        case 'widthXdepth':
+            calculatedValue = effectiveV1 * effectiveV2;
+            break;
+        case 'lengthXheightXdepth':
+            calculatedValue = effectiveV1 * effectiveV2 * effectiveV3;
+            break;
+        case 'lengthXdepth':
+            calculatedValue = effectiveV1 * effectiveV2;
+            break;
+        case 'lengthXheight':
+            calculatedValue = effectiveV1 * effectiveV2;
+            break;
+        case 'lengthXwidth':
+            calculatedValue = effectiveV1 * effectiveV2;
+            break;
+        case 'lengthXwidthXdepth':
+            calculatedValue = effectiveV1 * effectiveV2 * effectiveV3;
+            break;
+        default:
+            calculatedValue = 0;
+    }
+
+    currentDimensions.calculatedArea = calculatedValue;
+
+    // REMOVE THE FORMATTING FROM HERE - it interferes with typing
+    // We'll format only when the input loses focus or when saving
+}
+
+function getDimensionDisplayText(dimensionType = null, dimensionValues = null, dimensionUnit = null, toggleStates = null) {
+    // Use passed parameters or fall back to current state
+    const type = dimensionType || currentDimensions.type;
+    const unit = dimensionUnit || currentDimensions.unit;
+
+    if (type === 'none' || type === 'dozen') {
+        return '';
+    }
+
+    // Handle both array and object formats for dimension values
+    let values = dimensionValues || currentDimensions.values;
+    let v1 = 0, v2 = 0, v3 = 0;
+
+    if (Array.isArray(values)) {
+        [v1, v2, v3] = values;
+    } else if (typeof values === 'object' && values !== null) {
+        // Extract values from object
+        v1 = values[0] || values.values?.[0] || 0;
+        v2 = values[1] || values.values?.[1] || 0;
+        v3 = values[2] || values.values?.[2] || 0;
+    }
+
+    // Get toggle states
+    const toggles = toggleStates || {
+        toggle1: true,
+        toggle2: true,
+        toggle3: true
+    };
+
+    // Count how many dimensions are checked (actually used in calculation)
+    const checkedCount = [toggles.toggle1, toggles.toggle2, toggles.toggle3].filter(Boolean).length;
+
+    // DYNAMIC UNIT SUFFIX BASED ON CHECKED DIMENSIONS
+    let unitSuffix = '';
+    switch (checkedCount) {
+        case 1:
+            unitSuffix = unit; // Linear (1 dimension)
+            break;
+        case 2:
+            unitSuffix = unit + '²'; // Area (2 dimensions)
+            break;
+        case 3:
+            unitSuffix = unit + '³'; // Volume (3 dimensions)
+            break;
+        default:
+            unitSuffix = unit; // Fallback
+    }
+
+    // Format values
+    const formattedV1 = formatNumber(v1);
+    const formattedV2 = formatNumber(v2);
+    const formattedV3 = formatNumber(v3);
+
+    let dimensionText = '';
+
+    switch (type) {
+        case 'length':
+            dimensionText = `${toggles.toggle1 ? 'L' : '<span style="color: red">L</span>'} ${formattedV1}${unit}`;
+            break;
+        case 'widthXheight':
+            dimensionText = `${toggles.toggle1 ? 'W' : '<span style="color: red">W</span>'} ${formattedV1}${unit} X ${toggles.toggle2 ? 'H' : '<span style="color: red">H</span>'} ${formattedV2}${unit}`;
+            break;
+        case 'widthXheightXdepth':
+            dimensionText = `${toggles.toggle1 ? 'W' : '<span style="color: red">W</span>'} ${formattedV1}${unit} X ${toggles.toggle2 ? 'H' : '<span style="color: red">H</span>'} ${formattedV2}${unit} X ${toggles.toggle3 ? 'D' : '<span style="color: red">D</span>'} ${formattedV3}${unit}`;
+            break;
+        case 'lengthXwidthXheight':
+            dimensionText = `${toggles.toggle1 ? 'L' : '<span style="color: red">L</span>'} ${formattedV1}${unit} X ${toggles.toggle2 ? 'W' : '<span style="color: red">W</span>'} ${formattedV2}${unit} X ${toggles.toggle3 ? 'H' : '<span style="color: red">H</span>'} ${formattedV3}${unit}`;
+            break;
+        case 'widthXdepth':
+            dimensionText = `${toggles.toggle1 ? 'W' : '<span style="color: red">W</span>'} ${formattedV1}${unit} X ${toggles.toggle2 ? 'D' : '<span style="color: red">D</span>'} ${formattedV2}${unit}`;
+            break;
+        case 'lengthXheightXdepth':
+            dimensionText = `${toggles.toggle1 ? 'L' : '<span style="color: red">L</span>'} ${formattedV1}${unit} X ${toggles.toggle2 ? 'H' : '<span style="color: red">H</span>'} ${formattedV2}${unit} X ${toggles.toggle3 ? 'D' : '<span style="color: red">D</span>'} ${formattedV3}${unit}`;
+            break;
+        case 'lengthXdepth':
+            dimensionText = `${toggles.toggle1 ? 'L' : '<span style="color: red">L</span>'} ${formattedV1}${unit} X ${toggles.toggle2 ? 'D' : '<span style="color: red">D</span>'} ${formattedV2}${unit}`;
+            break;
+        case 'lengthXheight':
+            dimensionText = `${toggles.toggle1 ? 'L' : '<span style="color: red">L</span>'} ${formattedV1}${unit} X ${toggles.toggle2 ? 'H' : '<span style="color: red">H</span>'} ${formattedV2}${unit}`;
+            break;
+        case 'lengthXwidth':
+            dimensionText = `${toggles.toggle1 ? 'L' : '<span style="color: red">L</span>'} ${formattedV1}${unit} X ${toggles.toggle2 ? 'W' : '<span style="color: red">W</span>'} ${formattedV2}${unit}`;
+            break;
+        case 'lengthXwidthXdepth':
+            dimensionText = `${toggles.toggle1 ? 'L' : '<span style="color: red">L</span>'} ${formattedV1}${unit} X ${toggles.toggle2 ? 'W' : '<span style="color: red">W</span>'} ${formattedV2}${unit} X ${toggles.toggle3 ? 'D' : '<span style="color: red">D</span>'} ${formattedV3}${unit}`;
+            break;
+    }
+
+    return dimensionText;
+}
+
+function toggleDimensionsDisplay() {
+    showDimensions = !showDimensions;
+
+    // Update all existing rows to reflect the new global setting
+    const rows = document.querySelectorAll('#createListManual tbody tr[data-id], #copyListManual tbody tr[data-id]');
+
+    rows.forEach(row => {
+        const cells = row.children;
+        const particularsDiv = cells[1];
+        const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
+        const notes = particularsDiv.querySelector('.notes')?.textContent || '';
+
+        // Get the stored dimension data
+        const dimensionType = row.getAttribute('data-dimension-type') || 'none';
+        const dimensionValues = JSON.parse(row.getAttribute('data-dimension-values') || '[0,0,0]');
+        const dimensionUnit = row.getAttribute('data-dimension-unit') || 'ft';
+        const originalQuantity = parseFloat(row.getAttribute('data-original-quantity') || cells[2].textContent);
+        const unit = cells[3].textContent;
+        const rate = parseFloat(cells[4].textContent);
+        const finalQuantity = parseFloat(cells[5].textContent) / rate; // Calculate back the final quantity
+
+        // Recreate the particulars HTML with current showDimensions setting
+        let particularsHtml = formatParticularsManual(
+            itemName,
+            notes,
+            getDimensionDisplayText(dimensionType, dimensionValues, dimensionUnit),
+            originalQuantity,
+            finalQuantity,
+            rate,
+            dimensionType,
+            dimensionUnit,
+            unit
+        );
+
+        // Update the particulars cell
+        cells[1].innerHTML = particularsHtml;
+
+        // Reset per-row visibility to follow global setting
+        if (showDimensions) {
+            row.setAttribute('data-dimensions-visible', 'true');
+        } else {
+            row.setAttribute('data-dimensions-visible', 'false');
+        }
+
+        // Update toggle button icon in input table
+        if (row.closest('#createListManual')) {
+            const dimensionsBtn = row.querySelector('.dimensions-btn .material-icons');
+            if (dimensionsBtn) {
+                dimensionsBtn.textContent = showDimensions ? 'layers' : 'layers_clear';
+            }
+        }
+    });
+
+    // Also update the copy table
+    const copyRows = document.querySelectorAll('#copyListManual tbody tr[data-id]');
+    copyRows.forEach((row, index) => {
+        const createRow = rows[index];
+        if (createRow) {
+            row.children[1].innerHTML = createRow.children[1].innerHTML;
+        }
+    });
+
+    saveToLocalStorage();
+    saveStateToHistory();
+}
+
+async function handleItemSearch() {
+    const searchTerm = document.getElementById('itemNameManual').value.trim();
+    const suggestions = document.getElementById('item-suggestions');
+
+    // Debug: Check if elements exist
+    if (!suggestions) {
+        console.error('item-suggestions element not found');
+        return;
+    }
+
+    if (searchTerm.length < 1) {
+        suggestions.style.display = 'none';
+        return;
+    }
+
+    try {
+        const items = await getAllFromDB('savedItems');
+
+        if (!items || !Array.isArray(items)) {
+            suggestions.style.display = 'none';
+            return;
+        }
+
+        const filtered = items.filter(item =>
+            item && item.value && (
+                item.value.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                (item.value.otherNames && item.value.otherNames.toLowerCase().includes(searchTerm.toLowerCase()))
+            )
+        ).slice(0, 5);
+
+        suggestions.innerHTML = '';
+        filtered.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'item-suggestion-item';
+            div.textContent = item.value.name;
+            div.onclick = () => selectItemSuggestion(item.value.name);
+            suggestions.appendChild(div);
+        });
+
+        suggestions.style.display = filtered.length > 0 ? 'block' : 'none';
+    } catch (error) {
+        console.error('Error searching items:', error);
+        suggestions.style.display = 'none';
+    }
+}
+
+// Handle item selection from suggestions
+function selectItemSuggestion(itemName) {
+    document.getElementById('itemNameManual').value = itemName;
+    document.getElementById('item-suggestions').style.display = 'none';
+
+    // Trigger the existing item name input handler
+    handleItemNameInput();
+}
+
+// async function loadSavedItems() {
+//     try {
+//         const items = await getAllFromDB('savedItems');
+
+//     } catch (error) {
+//         console.error('Error loading saved items:', error);
+//     }
+// }
+
+// Add this event listener for datalist selection
+// document.getElementById('itemNameManual').addEventListener('input', function () {
+//     const input = this.value;
+//     const datalist = document.getElementById('saved-items-list');
+//     const options = datalist.querySelectorAll('option');
+
+//     // Find if the input matches any option with data-original-name
+//     let originalName = null;
+//     options.forEach(option => {
+//         if (option.value === input && option.getAttribute('data-original-name')) {
+//             originalName = option.getAttribute('data-original-name');
+//         }
+//     });
+
+//     // If we found an original name, update the input to show it
+//     if (originalName && input !== originalName) {
+//         this.value = originalName;
+//     }
+// });
+
+async function handleItemNameInput() {
+    const itemName = document.getElementById('itemNameManual').value.trim();
+    if (!itemName) return;
+
+    try {
+        // First, try exact match with original item name
+        let item = await getFromDB('savedItems', itemName);
+
+        // If no exact match, search through other names
+        if (!item) {
+            const allItems = await getAllFromDB('savedItems');
+            item = allItems.find(savedItem => {
+                if (!savedItem.value.otherNames) return false;
+
+                // Split other names by comma and check if any match
+                const otherNames = savedItem.value.otherNames.split(',').map(name => name.trim().toLowerCase());
+                return otherNames.includes(itemName.toLowerCase());
+            })?.value;
+        }
+
+        if (item) {
+            // Populate all manual item container fields
+            document.getElementById('dimensionType').value = item.dimensionType || 'none';
+            document.getElementById('quantityManual').value = item.defaultQuantity || 1;
+            document.getElementById('selectUnit').value = item.defaultUnit || '';
+
+            // CHECK FOR CUSTOMER-SPECIFIC RATE FIRST (only if auto-apply is enabled)
+            const customerName = document.getElementById('custName').value.trim();
+            let suggestedRate = null;
+
+            if (customerName && autoApplyCustomerRates) {
+                suggestedRate = await getCustomerRateSuggestion(customerName, itemName);
+            }
+
+            // Use customer-specific rate if available, otherwise use default rate
+            document.getElementById('rateManual').value = suggestedRate || item.defaultRate || '';
+
+            document.getElementById('itemNotesManual').value = item.notes || '';
+
+            // Populate HSN and product code fields
+            document.getElementById('hsnCodeManual').value = item.hsnCode || '';
+            document.getElementById('productCodeManual').value = item.productCode || '';
+
+            // Populate discount fields
+            document.getElementById('discountType').value = item.discountType || 'none';
+            document.getElementById('discountValue').value = item.discountValue || '';
+
+            // Populate dimension values in manual container - ensure they are numbers
+            if (item.dimensionValues) {
+                document.getElementById('dimension1').value = parseFloat(item.dimensionValues[0]) || '';
+                document.getElementById('dimension2').value = parseFloat(item.dimensionValues[1]) || '';
+                document.getElementById('dimension3').value = parseFloat(item.dimensionValues[2]) || '';
+            } else {
+                // Clear dimension values if none exist
+                document.getElementById('dimension1').value = '';
+                document.getElementById('dimension2').value = '';
+                document.getElementById('dimension3').value = '';
+            }
+
+            // Update currentDimensions object with the loaded values
+            currentDimensions.type = item.dimensionType || 'none';
+            currentDimensions.unit = item.measurementUnit || 'ft';
+            if (item.dimensionValues) {
+                currentDimensions.values = [
+                    parseFloat(item.dimensionValues[0]) || 0,
+                    parseFloat(item.dimensionValues[1]) || 0,
+                    parseFloat(item.dimensionValues[2]) || 0
+                ];
+            } else {
+                currentDimensions.values = [0, 0, 0];
+            }
+
+            // Set measurement unit and handle dimension type change to show/hide appropriate inputs
+            document.getElementById('measurementUnit').value = item.measurementUnit || 'ft';
+
+            // Force the dimension type change handler to update UI visibility
+            handleDimensionTypeChange();
+
+            // Re-calculate dimensions after all values are set
+            calculateDimensions();
+
+            // REMOVED THE NOTIFICATION FROM HERE - it was causing duplicates
+
+            // AUTO-SHOW RELEVANT SECTIONS BASED ON ITEM DATA
+            if (item.discountType && item.discountType !== 'none' && item.discountValue) {
+                document.getElementById('discount-inputs-container').style.display = 'flex';
+                document.getElementById('toggleDiscountBtn').style.backgroundColor = '#27ae60';
+            }
+
+            if (item.dimensionType && item.dimensionType !== 'none') {
+                document.getElementById('dimension-inputs-container').style.display = 'flex';
+                document.getElementById('toggleDimensionBtn').style.backgroundColor = '#3498db';
+            }
+
+            // Focus on next field for quick editing
+            document.getElementById('quantityManual').focus();
+        }
+    } catch (error) {
+        console.error('Error checking saved item:', error);
+    }
+}
+
+async function openManageItemsModal() {
+    try {
+        document.getElementById('manage-items-modal').style.display = 'block';
+        await loadItemsList();
+        toggleSettingsSidebar();
+    } catch (error) {
+        console.error('Error opening manage items modal:', error);
+    }
+}
+
+function closeManageItemsModal() {
+    document.getElementById('manage-items-modal').style.display = 'none';
+}
+
+function openAddItemModal() {
+    currentlyEditingItemId = null;
+    document.getElementById('add-item-modal-title').textContent = 'Add New Item';
+    document.getElementById('save-item-btn').textContent = 'Save Item';
+
+    // Reset all fields
+    document.getElementById('saved-item-name').value = '';
+    document.getElementById('saved-dimension-type').value = 'none';
+    document.getElementById('saved-measurement-unit').value = 'ft';
+    document.getElementById('saved-default-quantity').value = '1';
+    document.getElementById('saved-select-unit').value = '';
+    document.getElementById('saved-default-rate').value = '';
+    document.getElementById('saved-show-dimensions').checked = true;
+    document.getElementById('saved-dimension1').value = '';
+    document.getElementById('saved-dimension2').value = '';
+    document.getElementById('saved-dimension3').value = '';
+
+    // Reset dimension inputs visibility
+    handleSavedDimensionTypeChange();
+
+    document.getElementById('add-item-modal').style.display = 'block';
+}
+
+function closeAddItemModal() {
+    document.getElementById('add-item-modal').style.display = 'none';
+}
+
+// Handle dimension type change in saved items modal
+function handleSavedDimensionTypeChange() {
+    const dimensionType = document.getElementById('saved-dimension-type').value;
+    const measurementUnit = document.getElementById('saved-measurement-unit');
+    const dimensionInputs = document.getElementById('saved-dimension-inputs');
+    const dim1 = document.getElementById('saved-dimension1');
+    const dim2 = document.getElementById('saved-dimension2');
+    const dim3 = document.getElementById('saved-dimension3');
+    const dim1Toggle = document.getElementById('saved-dimension1-toggle');
+    const dim2Toggle = document.getElementById('saved-dimension2-toggle');
+    const dim3Toggle = document.getElementById('saved-dimension3-toggle');
+
+    // Reset all toggles to checked
+    dim1Toggle.checked = true;
+    dim2Toggle.checked = true;
+    dim3Toggle.checked = true;
+
+    if (dimensionType === 'none') {
+        measurementUnit.style.display = 'none';
+        dimensionInputs.style.display = 'none';
+    } else if (dimensionType === 'dozen') {
+        measurementUnit.style.display = 'none';
+        dimensionInputs.style.display = 'none';
+    } else {
+        measurementUnit.style.display = 'block';
+        dimensionInputs.style.display = 'block';
+
+        // Show/hide appropriate inputs based on dimension type
+        const inputs = document.querySelectorAll('#saved-dimension-inputs .dimension-input-with-toggle');
+        inputs.forEach(input => input.style.display = 'none');
+
+        // Show first input for all types
+        inputs[0].style.display = 'flex';
+        dim1.style.display = 'inline-block';
+
+        // Set placeholders based on dimension type
+        switch (dimensionType) {
+            case 'length':
+                dim1.placeholder = 'Length';
+                break;
+            case 'widthXheight':
+                inputs[1].style.display = 'flex';
+                dim1.placeholder = 'Width';
+                dim2.placeholder = 'Height';
+                break;
+            case 'widthXheightXdepth':
+                inputs[1].style.display = 'flex';
+                inputs[2].style.display = 'flex';
+                dim1.placeholder = 'Width';
+                dim2.placeholder = 'Height';
+                dim3.placeholder = 'Depth';
+                break;
+            case 'lengthXwidthXheight':
+                inputs[1].style.display = 'flex';
+                inputs[2].style.display = 'flex';
+                dim1.placeholder = 'Length';
+                dim2.placeholder = 'Width';
+                dim3.placeholder = 'Height';
+                break;
+            case 'widthXdepth':
+                inputs[1].style.display = 'flex';
+                dim1.placeholder = 'Width';
+                dim2.placeholder = 'Depth';
+                break;
+            case 'lengthXheightXdepth':
+                inputs[1].style.display = 'flex';
+                inputs[2].style.display = 'flex';
+                dim1.placeholder = 'Length';
+                dim2.placeholder = 'Height';
+                dim3.placeholder = 'Depth';
+                break;
+            case 'lengthXdepth':
+                inputs[1].style.display = 'flex';
+                dim1.placeholder = 'Length';
+                dim2.placeholder = 'Depth';
+                break;
+            case 'lengthXheight':
+                inputs[1].style.display = 'flex';
+                dim1.placeholder = 'Length';
+                dim2.placeholder = 'Height';
+                break;
+            case 'lengthXwidth':
+                inputs[1].style.display = 'flex';
+                dim1.placeholder = 'Length';
+                dim2.placeholder = 'Width';
+                break;
+            case 'lengthXwidthXdepth':
+                inputs[1].style.display = 'flex';
+                inputs[2].style.display = 'flex';
+                dim1.placeholder = 'Length';
+                dim2.placeholder = 'Width';
+                dim3.placeholder = 'Depth';
+                break;
+        }
+    }
+}
+
+function updateSavedDimensionCalculation() {
+    // Get dimension values
+    const dim1 = parseFloat(document.getElementById('saved-dimension1').value) || 0;
+    const dim2 = parseFloat(document.getElementById('saved-dimension2').value) || 0;
+    const dim3 = parseFloat(document.getElementById('saved-dimension3').value) || 0;
+
+    // Get toggle states
+    const dim1Toggle = document.getElementById('saved-dimension1-toggle').checked;
+    const dim2Toggle = document.getElementById('saved-dimension2-toggle').checked;
+    const dim3Toggle = document.getElementById('saved-dimension3-toggle').checked;
+
+    const dimensionType = document.getElementById('saved-dimension-type').value;
+
+    // Calculate effective values based on toggles
+    const effectiveV1 = dim1Toggle ? dim1 : 1;
+    const effectiveV2 = dim2Toggle ? dim2 : 1;
+    const effectiveV3 = dim3Toggle ? dim3 : 1;
+
+    let calculatedArea = 0;
+
+    switch (dimensionType) {
+        case 'length':
+            calculatedArea = effectiveV1;
+            break;
+        case 'widthXheight':
+            calculatedArea = effectiveV1 * effectiveV2;
+            break;
+        case 'widthXheightXdepth':
+            calculatedArea = effectiveV1 * effectiveV2 * effectiveV3;
+            break;
+        case 'lengthXwidthXheight':
+            calculatedArea = effectiveV1 * effectiveV2 * effectiveV3;
+            break;
+        case 'widthXdepth':
+            calculatedArea = effectiveV1 * effectiveV2;
+            break;
+        case 'lengthXheightXdepth':
+            calculatedArea = effectiveV1 * effectiveV2 * effectiveV3;
+            break;
+        case 'lengthXdepth':
+            calculatedArea = effectiveV1 * effectiveV2;
+            break;
+        case 'lengthXheight':
+            calculatedArea = effectiveV1 * effectiveV2;
+            break;
+        case 'lengthXwidth':
+            calculatedArea = effectiveV1 * effectiveV2;
+            break;
+        case 'lengthXwidthXdepth':
+            calculatedArea = effectiveV1 * effectiveV2 * effectiveV3;
+            break;
+        default:
+            calculatedArea = 0;
+    }
+
+    // You can display this calculated area if needed, or use it for preview
+    // For now, we'll just update the display values
+    if (document.getElementById('saved-dimension1').value) {
+        document.getElementById('saved-dimension1').value = dim1.toFixed(2);
+    }
+    if (document.getElementById('saved-dimension2').value && document.getElementById('saved-dimension2').style.display !== 'none') {
+        document.getElementById('saved-dimension2').value = dim2.toFixed(2);
+    }
+    if (document.getElementById('saved-dimension3').value && document.getElementById('saved-dimension3').style.display !== 'none') {
+        document.getElementById('saved-dimension3').value = dim3.toFixed(2);
+    }
+}
+// Handle measurement unit change in saved items modal
+function handleSavedMeasurementUnitChange() {
+    // Unit conversion logic can be added here if needed
+}
+// Add this function to debug stock saving
+async function debugStock() {
+    const items = await getAllFromDB('savedItems');
+    console.log('All items with stock:', items.map(item => ({
+        name: item.value.name,
+        stock: item.value.stockQuantity,
+        hasStock: item.value.stockQuantity != null
+    })));
+}
+
+
+async function saveItem() {
+    const itemName = document.getElementById('saved-item-name').value.trim();
+    const dimensionType = document.getElementById('saved-dimension-type').value;
+    const measurementUnit = document.getElementById('saved-measurement-unit').value;
+    const defaultQuantity = parseFloat(document.getElementById('saved-default-quantity').value) || 1;
+    const defaultUnit = document.getElementById('saved-select-unit').value.trim();
+    const defaultRate = parseFloat(document.getElementById('saved-default-rate').value) || 0;
+    const showDimensions = document.getElementById('saved-show-dimensions').checked;
+
+    // Get discount fields
+    const discountType = document.getElementById('saved-discount-type').value;
+    const discountValue = parseFloat(document.getElementById('saved-discount-value').value) || 0;
+
+    // Get HSN and product fields
+    const hsnCode = document.getElementById('saved-hsn-code').value.trim();
+    const stockQuantity = parseInt(document.getElementById('saved-stock-quantity').value) || 0;
+    const productCode = document.getElementById('saved-product-code').value.trim();
+    const purchaseRate = parseFloat(document.getElementById('saved-purchase-rate').value) || 0;
+    const otherNames = document.getElementById('saved-other-names').value.trim();
+    const notes = document.getElementById('saved-notes').value.trim();
+
+    // Get dimension values
+    const dimension1 = parseFloat(document.getElementById('saved-dimension1').value) || 0;
+    const dimension2 = parseFloat(document.getElementById('saved-dimension2').value) || 0;
+    const dimension3 = parseFloat(document.getElementById('saved-dimension3').value) || 0;
+    const dimensionValues = [dimension1, dimension2, dimension3];
+
+    if (!itemName) {
+        showNotification('Please enter an item name');
+        return;
+    }
+
+    const itemData = {
+        name: itemName,
+        dimensionType: dimensionType,
+        measurementUnit: measurementUnit,
+        dimensionValues: dimensionValues,
+        defaultQuantity: defaultQuantity,
+        defaultUnit: defaultUnit,
+        defaultRate: defaultRate,
+        showDimensions: showDimensions,
+        // Add discount fields
+        discountType: discountType,
+        discountValue: discountValue,
+        // Add other fields
+        hsnCode: hsnCode,
+        stockQuantity: stockQuantity, // This should be saved
+        productCode: productCode,
+        purchaseRate: purchaseRate,
+        otherNames: otherNames,
+        notes: notes,
+        timestamp: Date.now()
+    };
+
+    // DEBUG: Log what we're saving
+    console.log('Saving item data:', itemData);
+
+    try {
+        await setInDB('savedItems', itemName, itemData);
+
+        // DEBUG: Verify it was saved
+        const savedItem = await getFromDB('savedItems', itemName);
+        console.log('Item saved to DB:', savedItem);
+
+        closeAddItemModal();
+        await loadItemsList();
+    } catch (error) {
+        console.error('Error saving item:', error);
+    }
+    await debugStock();
+}
+
+async function editItem(itemName) {
+    try {
+        const item = await getFromDB('savedItems', itemName);
+        if (item) {
+            currentlyEditingItemId = itemName;
+            document.getElementById('add-item-modal-title').textContent = 'Edit Item';
+            document.getElementById('save-item-btn').textContent = 'Update Item';
+
+            // Populate all fields
+            document.getElementById('saved-item-name').value = item.name;
+            // Add stock quantity field
+            document.getElementById('saved-stock-quantity').value = item.stockQuantity || 0;
+            document.getElementById('saved-dimension-type').value = item.dimensionType || 'none';
+            document.getElementById('saved-measurement-unit').value = item.measurementUnit || 'ft';
+            document.getElementById('saved-default-quantity').value = item.defaultQuantity || 1;
+            document.getElementById('saved-select-unit').value = item.defaultUnit || '';
+            document.getElementById('saved-default-rate').value = item.defaultRate || '';
+            document.getElementById('saved-show-dimensions').checked = item.showDimensions !== false;
+
+            // Populate dimension values
+            if (item.dimensionValues) {
+                document.getElementById('saved-dimension1').value = parseFloat(item.dimensionValues[0]) || '';
+                document.getElementById('saved-dimension2').value = parseFloat(item.dimensionValues[1]) || '';
+                document.getElementById('saved-dimension3').value = parseFloat(item.dimensionValues[2]) || '';
+            } else {
+                // Clear dimension values if none exist
+                document.getElementById('saved-dimension1').value = '';
+                document.getElementById('saved-dimension2').value = '';
+                document.getElementById('saved-dimension3').value = '';
+            }
+
+            // Populate dimension toggle states
+            if (item.dimensionToggles) {
+                document.getElementById('saved-dimension1-toggle').checked = item.dimensionToggles.toggle1 !== false;
+                document.getElementById('saved-dimension2-toggle').checked = item.dimensionToggles.toggle2 !== false;
+                document.getElementById('saved-dimension3-toggle').checked = item.dimensionToggles.toggle3 !== false;
+            } else {
+                // Default to checked if no toggle states exist
+                document.getElementById('saved-dimension1-toggle').checked = true;
+                document.getElementById('saved-dimension2-toggle').checked = true;
+                document.getElementById('saved-dimension3-toggle').checked = true;
+            }
+
+            // Populate discount fields
+            document.getElementById('saved-discount-type').value = item.discountType || 'none';
+            document.getElementById('saved-discount-value').value = item.discountValue || '';
+
+            // Populate HSN and product fields
+            document.getElementById('saved-hsn-code').value = item.hsnCode || '';
+            document.getElementById('saved-product-code').value = item.productCode || '';
+            document.getElementById('saved-purchase-rate').value = item.purchaseRate || '';
+            document.getElementById('saved-other-names').value = item.otherNames || '';
+            document.getElementById('saved-notes').value = item.notes || '';
+
+            // Handle dimension type change to show/hide appropriate inputs
+            handleSavedDimensionTypeChange();
+
+            document.getElementById('add-item-modal').style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Error editing item:', error);
+        showNotification('Error loading item for editing');
+    }
+}
+
+async function saveItem() {
+    const itemName = document.getElementById('saved-item-name').value.trim();
+    const dimensionType = document.getElementById('saved-dimension-type').value;
+    const measurementUnit = document.getElementById('saved-measurement-unit').value;
+    const defaultQuantity = parseFloat(document.getElementById('saved-default-quantity').value) || 1;
+    const defaultUnit = document.getElementById('saved-select-unit').value.trim();
+    const defaultRate = parseFloat(document.getElementById('saved-default-rate').value) || 0;
+    const showDimensions = document.getElementById('saved-show-dimensions').checked;
+
+    // Get stock quantity - ADD THIS LINE
+    const stockQuantity = parseInt(document.getElementById('saved-stock-quantity').value) || 0;
+
+    // Get discount fields
+    const discountType = document.getElementById('saved-discount-type').value;
+    const discountValue = parseFloat(document.getElementById('saved-discount-value').value) || 0;
+
+    // Get HSN and product fields
+    const hsnCode = document.getElementById('saved-hsn-code').value.trim();
+    const productCode = document.getElementById('saved-product-code').value.trim();
+    const purchaseRate = parseFloat(document.getElementById('saved-purchase-rate').value) || 0;
+    const otherNames = document.getElementById('saved-other-names').value.trim();
+    const notes = document.getElementById('saved-notes').value.trim();
+
+    // Get dimension values
+    const dimension1 = parseFloat(document.getElementById('saved-dimension1').value) || 0;
+    const dimension2 = parseFloat(document.getElementById('saved-dimension2').value) || 0;
+    const dimension3 = parseFloat(document.getElementById('saved-dimension3').value) || 0;
+    const dimensionValues = [dimension1, dimension2, dimension3];
+
+    if (!itemName) {
+        showNotification('Please enter an item name');
+        return;
+    }
+
+    const itemData = {
+        name: itemName,
+        dimensionType: dimensionType,
+        measurementUnit: measurementUnit,
+        dimensionValues: dimensionValues,
+        defaultQuantity: defaultQuantity,
+        defaultUnit: defaultUnit,
+        defaultRate: defaultRate,
+        showDimensions: showDimensions,
+        // Add stock quantity to the item data
+        stockQuantity: stockQuantity,
+        // Add discount fields
+        discountType: discountType,
+        discountValue: discountValue,
+        // Add other fields
+        hsnCode: hsnCode,
+        productCode: productCode,
+        purchaseRate: purchaseRate,
+        otherNames: otherNames,
+        notes: notes,
+        timestamp: Date.now()
+    };
+
+    try {
+        await setInDB('savedItems', itemName, itemData);
+        closeAddItemModal();
+        await loadItemsList();
+    } catch (error) {
+        console.error('Error saving item:', error);
+    }
+}
+// Batch Invoice Functions
+function openBatchInvoiceModal() {
+    toggleSettingsSidebar();
+    document.getElementById('batch-invoice-modal').style.display = 'block';
+}
+
+function closeBatchInvoiceModal() {
+    document.getElementById('batch-invoice-modal').style.display = 'none';
+}
+
+async function generateBatchInvoice() {
+    const input = document.getElementById('batch-invoice-input').value.trim();
+
+    if (!input) {
+        showNotification('Please enter product data', 'error');
+        return;
+    }
+
+    try {
+        // Parse input array
+        const cleanInput = input.replace(/[\[\]]/g, '');
+        const items = cleanInput.split(',').map(item => item.trim());
+
+        if (items.length < 3) {
+            showNotification('Invalid format. Need at least 2 products + contact + customer name', 'error');
+            return;
+        }
+
+        // Extract contact and customer name (last 2 elements)
+        const contactNumber = items[items.length - 2];
+        const customerName = items[items.length - 1];
+        const productItems = items.slice(0, items.length - 2);
+
+        // Fill customer details
+        document.getElementById('custName').value = customerName;
+        document.getElementById('custPhone').value = contactNumber;
+
+        // Process each product
+        for (const item of productItems) {
+            const [productCode, quantity] = item.split('@');
+
+            if (!productCode || !quantity) {
+                console.warn('Invalid item format:', item);
+                continue;
+            }
+
+            await addItemByProductCode(productCode.trim(), parseFloat(quantity.trim()));
+        }
+
+        closeBatchInvoiceModal();
+        showNotification(`Added ${productItems.length} items for ${customerName}`, 'success');
+
+    } catch (error) {
+        console.error('Error generating batch invoice:', error);
+        showNotification('Error processing batch invoice', 'error');
+    }
+}
+
+async function addItemByProductCode(productCode, quantity) {
+    try {
+        // Search for item by product code
+        const allItems = await getAllFromDB('savedItems');
+        const item = allItems.find(savedItem =>
+            savedItem.value.productCode === productCode
+        );
+
+        if (!item) {
+            console.warn('Product not found:', productCode);
+            showNotification(`Product ${productCode} not found`, 'warning');
+            return;
+        }
+
+        // Fill the manual input fields with item data
+        document.getElementById('itemNameManual').value = item.value.name;
+        document.getElementById('quantityManual').value = quantity;
+        document.getElementById('selectUnit').value = item.value.defaultUnit || '';
+        document.getElementById('rateManual').value = item.value.defaultRate || '';
+        document.getElementById('itemNotesManual').value = item.value.notes || '';
+        document.getElementById('hsnCodeManual').value = item.value.hsnCode || '';
+        document.getElementById('productCodeManual').value = item.value.productCode || '';
+        document.getElementById('discountType').value = item.value.discountType || 'none';
+        document.getElementById('discountValue').value = item.value.discountValue || '';
+
+        // Handle dimensions
+        document.getElementById('dimensionType').value = item.value.dimensionType || 'none';
+        if (item.value.dimensionType && item.value.dimensionType !== 'none') {
+            document.getElementById('measurementUnit').value = item.value.measurementUnit || 'ft';
+
+            if (item.value.dimensionValues) {
+                document.getElementById('dimension1').value = parseFloat(item.value.dimensionValues[0]) || '';
+                document.getElementById('dimension2').value = parseFloat(item.value.dimensionValues[1]) || '';
+                document.getElementById('dimension3').value = parseFloat(item.value.dimensionValues[2]) || '';
+            }
+
+            // Show dimension inputs if needed
+            document.getElementById('dimension-inputs-container').style.display = 'flex';
+            document.getElementById('toggleDimensionBtn').style.backgroundColor = '#3498db';
+            handleDimensionTypeChange();
+        }
+
+        // Show discount inputs if needed
+        if (item.value.discountType && item.value.discountType !== 'none') {
+            document.getElementById('discount-inputs-container').style.display = 'flex';
+            document.getElementById('toggleDiscountBtn').style.backgroundColor = '#27ae60';
+        }
+
+        // Add the item to table
+        await addRowManual();
+
+    } catch (error) {
+        console.error('Error adding item by product code:', error);
+        throw error;
+    }
+}
+
+async function reduceStockOnSave() {
+    try {
+        const rows = document.querySelectorAll('#createListManual tbody tr[data-id]');
+
+        for (const row of rows) {
+            const itemName = row.children[1].querySelector('.itemNameClass')?.textContent.trim();
+            const quantity = parseFloat(row.getAttribute('data-original-quantity')) || parseFloat(row.children[2].textContent);
+
+            if (itemName && quantity > 0) {
+                const savedItem = await getFromDB('savedItems', itemName);
+                if (savedItem && savedItem.stockQuantity !== undefined) {
+                    const newStock = Math.max(0, savedItem.stockQuantity - quantity);
+                    savedItem.stockQuantity = newStock;
+                    await setInDB('savedItems', itemName, savedItem);
+                    console.log(`Reduced stock for ${itemName}: ${savedItem.stockQuantity} -> ${newStock}`);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error reducing stock:', error);
+    }
+}
+
+async function loadItemsList() {
+    try {
+        const items = await getAllFromDB('savedItems');
+        const itemsList = document.getElementById('items-list');
+        itemsList.innerHTML = '';
+
+        // DEBUG: Log all items to see what's in the database
+        console.log('All items from DB:', items);
+
+        if (items.length === 0) {
+            itemsList.innerHTML = '<div class="item-card">No items saved yet</div>';
+            return;
+        }
+
+        items.forEach(item => {
+            const itemCard = document.createElement('div');
+            itemCard.className = 'item-card';
+
+            // DEBUG: Log each item to see its structure
+            console.log('Item data:', item);
+
+            // Show dimension values in the item list
+            let dimensionInfo = '';
+            if (item.value.dimensionValues && item.value.dimensionType !== 'none' && item.value.dimensionType !== 'dozen') {
+                const [v1, v2, v3] = item.value.dimensionValues;
+                dimensionInfo = `<div>Dimension Values: ${v1}, ${v2}, ${v3} ${item.value.measurementUnit || 'ft'}</div>`;
+            }
+
+            // FIXED: Better stock display logic
+            let stockInfo = '';
+            // Check if stockQuantity exists (including 0)
+            if (item.value.stockQuantity !== undefined && item.value.stockQuantity !== null) {
+                stockInfo = `<div>Stock: ${item.value.stockQuantity}</div>`;
+            }
+
+            // Show other names if available
+            let otherNamesInfo = '';
+            if (item.value.otherNames) {
+                otherNamesInfo = `<div>Other Names: ${item.value.otherNames}</div>`;
+            }
+
+            // Show discount info if available
+            let discountInfo = '';
+            if (item.value.discountType && item.value.discountType !== 'none') {
+                discountInfo = `<div>Discount: ${item.value.discountType} - ${item.value.discountValue}</div>`;
+            }
+
+            // Show HSN/SAC info if available
+            let hsnInfo = '';
+            if (item.value.hsnCode) {
+                hsnInfo = `<div>HSN/SAC: ${item.value.hsnCode}</div>`;
+            }
+
+            // Show product code info if available
+            let productCodeInfo = '';
+            if (item.value.productCode) {
+                productCodeInfo = `<div>Product Code: ${item.value.productCode}</div>`;
+            }
+
+            // Show purchase rate info if available
+            let purchaseRateInfo = '';
+            if (item.value.purchaseRate) {
+                purchaseRateInfo = `<div>Purchase Rate: ₹${item.value.purchaseRate}</div>`;
+            }
+
+            itemCard.innerHTML = `
+                <div class="item-header">
+                    <div class="item-name">${item.value.name}</div>
+                    <div class="item-actions">
+                        <button class="btn-edit" onclick="editItem('${item.value.name}')">Edit</button>
+                        <button class="btn-delete" onclick="deleteItem('${item.value.name}')">Delete</button>
+                    </div>
+                </div>
+                <div class="item-details">
+                    <div>Dimension Type: ${item.value.dimensionType}</div>
+                    <div>Measurement Unit: ${item.value.measurementUnit || 'N/A'}</div>
+                    ${dimensionInfo}
+                    <div>Default Quantity: ${item.value.defaultQuantity || 1}</div>
+                    <div>Default Unit: ${item.value.defaultUnit}</div>
+                    <div>Default Rate: ₹${item.value.defaultRate}</div>
+                    ${hsnInfo}
+                    ${stockInfo}
+                    ${productCodeInfo}
+                    ${purchaseRateInfo}
+                    ${discountInfo}
+                    ${otherNamesInfo}
+                    <div>Notes: ${item.value.notes || 'None'}</div>
+                    <div>Show Dimensions: ${item.value.showDimensions ? 'Yes' : 'No'}</div>
+                </div>
+            `;
+            itemsList.appendChild(itemCard);
+        });
+    } catch (error) {
+        console.error('Error loading items list:', error);
+    }
+}
+
+function searchItems() {
+    const searchTerm = document.getElementById('item-search').value.toLowerCase();
+    const itemCards = document.querySelectorAll('.item-card');
+
+    itemCards.forEach(card => {
+        const itemName = card.querySelector('.item-name').textContent.toLowerCase();
+        if (itemName.includes(searchTerm)) {
+            card.style.display = 'block';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+}
+
+async function deleteItem(itemName) {
+    const shouldDeleteItem = await showConfirm(`Are you sure you want to delete "${itemName}"?`)
+    if (shouldDeleteItem) {
+        try {
+            await removeFromDB('savedItems', itemName);
+            // await loadSavedItems();
+            await loadItemsList();
+        } catch (error) {
+            console.error('Error deleting item:', error);
+        }
+    }
+}
+
+async function loadSavedCustomers() {
+    try {
+        const customers = await getAllFromDB('savedCustomers');
+        const datalist = document.getElementById('customer-list');
+        datalist.innerHTML = '';
+
+        customers.forEach(customer => {
+            const option = document.createElement('option');
+            option.value = customer.value.name;
+            datalist.appendChild(option);
+        });
+    } catch (error) {
+        console.error('Error loading saved customers:', error);
+    }
+}
+
+async function handleCustomerNameInput() {
+    const customerName = document.getElementById('custName').value.trim();
+    if (!customerName) return;
+
+    try {
+        const customer = await getFromDB('savedCustomers', customerName);
+        if (customer) {
+            document.getElementById('custAddr').value = customer.address || '';
+            document.getElementById('custPhone').value = customer.phone || '';
+            document.getElementById('custGSTIN').value = customer.gstin || '';
+            saveToLocalStorage();
+        }
+    } catch (error) {
+        console.error('Error checking saved customer:', error);
+    }
+}
+
+
+// Open Manage Customers Modal
+function openManageCustomersModal() {
+    document.getElementById('manage-customers-modal').style.display = 'block';
+
+    // Reset to regular mode by default
+    document.getElementById('customer-mode-toggle').checked = false;
+    currentCustomerMode = 'regular';
+    document.getElementById('add-customer-main-btn').textContent = 'Add New Customer';
+
+    // LOAD REGULAR CUSTOMERS INITIALLY
+    loadCustomersList();
+    toggleSettingsSidebar();
+}
+
+
+function closeManageCustomersModal() {
+    document.getElementById('manage-customers-modal').style.display = 'none';
+}
+
+function openAddCustomerModal() {
+    currentlyEditingCustomerId = null;
+    document.getElementById('add-customer-modal-title').textContent = 'Add New Customer';
+    document.getElementById('save-customer-btn').textContent = 'Save Customer';
+
+    document.getElementById('saved-customer-name').value = '';
+    document.getElementById('saved-customer-address').value = '';
+    document.getElementById('saved-customer-phone').value = '';
+    document.getElementById('saved-customer-gstin').value = '';
+
+    document.getElementById('add-customer-modal').style.display = 'block';
+}
+
+function closeAddCustomerModal() {
+    document.getElementById('add-customer-modal').style.display = 'none';
+    currentlyEditingCustomerId = null; // ADD THIS LINE
+}
+
+async function saveCustomer() {
+    const customerName = document.getElementById('saved-customer-name').value.trim();
+    const address = document.getElementById('saved-customer-address').value.trim();
+    const phone = document.getElementById('saved-customer-phone').value.trim();
+    const gstin = document.getElementById('saved-customer-gstin').value.trim();
+
+    if (!customerName) {
+        showNotification('Please enter a customer name', 'error');
+        return;
+    }
+
+    // Check for duplicate customer (case-insensitive)
+    const existingCustomers = await getAllFromDB('savedCustomers');
+    const customerExists = existingCustomers.some(customer =>
+        customer.value.name.toLowerCase() === customerName.toLowerCase()
+    );
+
+    // If editing and name changed, or creating new and name exists
+    if ((currentlyEditingCustomerId && customerName.toLowerCase() !== currentlyEditingCustomerId.toLowerCase()) ||
+        (!currentlyEditingCustomerId && customerExists)) {
+        showNotification('Customer already exists! Please use a different name.', 'error');
+        return;
+    }
+
+    const customerData = {
+        name: customerName,
+        address: address,
+        phone: phone,
+        gstin: gstin,
+        timestamp: Date.now()
+    };
+
+    try {
+        // CHECK IF EDITING EXISTING CUSTOMER
+        if (currentlyEditingCustomerId) {
+            // UPDATE existing customer
+            await setInDB('savedCustomers', currentlyEditingCustomerId, customerData);
+            showNotification('Customer updated successfully!', 'success');
+        } else {
+            // CREATE new customer
+            await setInDB('savedCustomers', customerName, customerData);
+            showNotification('Customer saved successfully!', 'success');
+        }
+
+        await loadSavedCustomers();
+        closeAddCustomerModal();
+        // RESET editing state
+        currentlyEditingCustomerId = null;
+        await loadCustomersList();
+    } catch (error) {
+        console.error('Error saving customer:', error);
+    }
+}
+//load regular mode customers
+async function loadCustomersList() {
+    try {
+        const customers = await getAllFromDB('savedCustomers');
+        const customersList = document.getElementById('customers-list');
+        customersList.innerHTML = '';
+
+        if (customers.length === 0) {
+            customersList.innerHTML = '<div class="customer-card">No regular customers saved yet</div>';
+            return;
+        }
+
+        customers.forEach(customer => {
+            const customerCard = document.createElement('div');
+            customerCard.className = 'customer-card';
+            customerCard.innerHTML = `
+                <div class="customer-header">
+                    <div class="customer-name">${customer.value.name}</div>
+                    <div class="customer-actions">
+                        <button class="btn-payment" data-customer-name="${customer.value.name}" data-gstin="${customer.value.gstin || ''}">Payment & CN</button>
+                        <button class="btn-ledger" data-customer-name="${customer.value.name}" data-gstin="${customer.value.gstin || ''}">Ledger</button>
+                        <button class="btn-edit" onclick="editCustomer('${customer.value.name}')">Edit</button>
+                        <button class="btn-delete" onclick="deleteCustomer('${customer.value.name}')">Delete</button>
+                    </div>
+                </div>
+                <div class="customer-details-text">
+                    <div>Address: ${customer.value.address || 'Not provided'}</div>
+                    <div>Phone: ${customer.value.phone || 'Not provided'}</div>
+                    <div>GSTIN: ${customer.value.gstin || 'Not provided'}</div>
+                </div>
+            `;
+            customersList.appendChild(customerCard);
+        });
+    } catch (error) {
+        console.error('Error loading customers list:', error);
+    }
+}
+
+// Search Customers (works for both regular and GST)
+function searchCustomers() {
+    const searchTerm = document.getElementById('customer-search').value.toLowerCase();
+    const customerCards = document.querySelectorAll('#customers-list .customer-card');
+
+    customerCards.forEach(card => {
+        const customerName = card.querySelector('.customer-name').textContent.toLowerCase();
+        const customerDetails = card.querySelector('.customer-details-text').textContent.toLowerCase();
+
+        if (customerName.includes(searchTerm) || customerDetails.includes(searchTerm)) {
+            card.style.display = 'block';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+}
+
+// Search Bills (works for both regular and GST)
+function searchSavedBills() {
+    const searchTerm = document.getElementById('saved-bills-search').value.toLowerCase();
+    const billCards = document.querySelectorAll('#saved-bills-list .saved-bill-card');
+
+    billCards.forEach(card => {
+        const billTitle = card.querySelector('.saved-bill-title').textContent.toLowerCase();
+        const billDetails = card.querySelector('.saved-bill-details').textContent.toLowerCase();
+
+        if (billTitle.includes(searchTerm) || billDetails.includes(searchTerm)) {
+            card.style.display = 'block';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+}
+async function editCustomer(customerName) {
+    try {
+        const customer = await getFromDB('savedCustomers', customerName);
+        if (customer) {
+            currentlyEditingCustomerId = customerName;
+            document.getElementById('add-customer-modal-title').textContent = 'Edit Customer';
+            document.getElementById('save-customer-btn').textContent = 'Update Customer';
+
+            // PROPERLY FILL ALL FORM FIELDS
+            document.getElementById('saved-customer-name').value = customer.name;
+            document.getElementById('saved-customer-address').value = customer.address || '';
+            document.getElementById('saved-customer-phone').value = customer.phone || '';
+            document.getElementById('saved-customer-gstin').value = customer.gstin || '';
+
+            document.getElementById('add-customer-modal').style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Error editing customer:', error);
+        showNotification('Error loading customer for editing', 'error');
+    }
+}
+
+async function deleteCustomer(customerName) {
+    const shouldDeleteCustomer = await showConfirm(`Are you sure you want to delete "${customerName}"?`)
+    if (shouldDeleteCustomer) {
+        try {
+            await removeFromDB('savedCustomers', customerName);
+            await loadSavedCustomers();
+            await loadCustomersList();
+        } catch (error) {
+            console.error('Error deleting customer:', error);
+        }
+    }
+}
+
+async function autoSaveRegularCustomer(customerName) {
+    // Check if customer already exists in regular customers (case-insensitive)
+    const existingCustomers = await getAllFromDB('savedCustomers');
+    const customerExists = existingCustomers.some(customer =>
+        customer.value.name.toLowerCase() === customerName.toLowerCase()
+    );
+
+    if (customerExists) {
+        console.log('Customer already exists, skipping auto-save');
+        return;
+    }
+
+    // Create customer data
+    const customerData = {
+        name: customerName,
+        address: document.getElementById('custAddr').value || '',
+        phone: document.getElementById('custPhone').value || '',
+        gstin: document.getElementById('custGSTIN').value || '',
+        timestamp: Date.now()
+    };
+
+    try {
+        await setInDB('savedCustomers', customerName, customerData);
+        await loadSavedCustomers(); // Refresh the customer list
+        console.log('Customer auto-saved:', customerName);
+    } catch (error) {
+        console.error('Error auto-saving customer:', error);
+    }
+}
+
+// Check for duplicate bill/invoice numbers
+async function checkDuplicateBillNumber(number, type) {
+    try {
+        const storeName = type === 'gst' ? 'gstSavedBills' : 'savedBills';
+        const savedBills = await getAllFromDB(storeName);
+
+        for (const bill of savedBills) {
+            if (type === 'gst') {
+                if (bill.value.invoiceDetails && bill.value.invoiceDetails.number === number) {
+                    return true;
+                }
+            } else {
+                if (bill.value.customer && bill.value.customer.billNo === number) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    } catch (error) {
+        console.error('Error checking duplicate bill number:', error);
+        return false;
+    }
+}
+
+// Reset edit mode
+function resetEditMode() {
+    editMode = false;
+    currentEditingBillId = null;
+    currentEditingBillType = null;
+    updateSaveButtonAppearance();
+}
+
+// Update save button appearance
+function updateSaveButtonAppearance() {
+    const saveBtn = document.querySelector('.settings-btn[onclick="saveCurrentBill()"]');
+    if (saveBtn) {
+        if (editMode) {
+            saveBtn.style.backgroundColor = '#27ae60'; // Green
+            saveBtn.innerHTML = '<span class="material-icons">save</span>UPDATE BILL';
+        } else {
+            saveBtn.style.backgroundColor = ''; // Default
+            saveBtn.innerHTML = '<span class="material-icons">save</span>SAVE BILL';
+        }
+    }
+}
+
+// Set edit mode
+function setEditMode(billId, billType) {
+    editMode = true;
+    currentEditingBillId = billId;
+    currentEditingBillType = billType;
+    updateSaveButtonAppearance();
+}
+
+async function editSavedBill(billId, billType, event) {
+    if (event) event.stopPropagation();
+
+    // Set edit mode FIRST
+    setEditMode(billId, billType);
+
+    // Store original bill number for duplicate checking
+    if (billType === 'regular') {
+        const savedBill = await getFromDB('savedBills', billId);
+        window.currentEditingBillOriginalNumber = savedBill?.customer?.billNo;
+
+        // LOAD THE BILL DATA INTO THE TABLE
+        await loadSavedBill(billId);
+    } else {
+        const savedBill = await getFromDB('gstSavedBills', billId);
+        window.currentEditingBillOriginalNumber = savedBill?.invoiceDetails?.number;
+
+        // LOAD THE GST BILL DATA INTO THE TABLE
+        await loadGSTSavedBill(billId);
+
+        // Ensure customer details are loaded for GST bills
+        updateGSTBillDisplay();
+    }
+
+    closeSavedBillsModal();
+    showNotification('Edit mode activated. Make your changes and click UPDATE BILL to save.', 'info');
+    await saveToLocalStorage();
+}
+
+// Delete saved bill with confirmation
+async function deleteSavedBill(billId, billType, event) {
+    if (event) event.stopPropagation();
+
+    const shouldDelete = await showConfirm('Are you sure you want to delete this bill?');
+    if (shouldDelete) {
+        try {
+            const storeName = billType === 'gst' ? 'gstSavedBills' : 'savedBills';
+            await removeFromDB(storeName, billId);
+
+            // Reload the appropriate list
+            if (billType === 'gst') {
+                await loadGSTSavedBillsList();
+            } else {
+                await loadSavedBillsList();
+            }
+
+            showNotification('Bill deleted successfully!', 'success');
+        } catch (error) {
+            console.error('Error deleting bill:', error);
+            showNotification('Error deleting bill', 'error');
+        }
+    }
+}
+
+async function saveCurrentBill() {
+    if (isGSTMode) {
+        await saveGSTCurrentBill();
+    } else {
+        // Regular bill save logic
+        const customerName = document.getElementById('custName').value.trim();
+        const billNo = document.getElementById('billNo').value.trim();
+        const totalAmount = document.getElementById('createTotalAmountManual').textContent || '0.00';
+
+        // Simple validation - just check if bill number has any content
+        if (!billNo || billNo.length === 0) {
+            showNotification('Please enter a bill number before saving.', 'error');
+            return;
+        }
+
+        // Check for duplicate bill number (skip if in edit mode with same bill number)
+        if (!editMode || (editMode && billNo !== window.currentEditingBillOriginalNumber)) {
+            const isDuplicate = await checkDuplicateBillNumber(billNo, 'regular');
+            if (isDuplicate) {
+                showNotification('Bill number already exists! Please use a different number.', 'error');
+                return;
+            }
+        }
+
+        // Auto-save customer if name exists AND doesn't already exist
+        if (customerName) {
+            await autoSaveRegularCustomer(customerName);
+        }
+
+        try {
+            const currentData = await getFromDB('billDataManual', 'currentBill');
+            if (!currentData) return;
+
+            // Replace the current item count calculation
+            const itemCount = document.querySelectorAll('#createListManual tbody tr[data-id]').length;
+
+            // Update the saved bill data to include proper item count
+            const savedBill = {
+                ...currentData,
+                title: `${customerName} - ${billNo}`,
+                totalAmount: totalAmount,
+                timestamp: Date.now(),
+                date: document.getElementById('billDate').value || new Date().toLocaleDateString(),
+                itemCount: itemCount // Add this line
+            };
+
+            let billId;
+            if (editMode && currentEditingBillId) {
+                // Edit mode: Update existing bill
+                billId = currentEditingBillId;
+                await setInDB('savedBills', billId, savedBill);
+                // ADD STOCK REDUCTION HERE - for edit mode
+                await reduceStockOnSave();
+                showNotification('Bill updated successfully!');
+
+                // Reset edit mode
+                resetEditMode();
+            } else {
+                // Normal mode: Create new bill
+                billId = `saved-bill-${Date.now()}`;
+                await setInDB('savedBills', billId, savedBill);
+                // ADD STOCK REDUCTION HERE - for new bill
+                await reduceStockOnSave();
+                showNotification('Bill saved successfully!');
+            }
+
+        } catch (error) {
+            console.error('Error saving bill:', error);
+        }
+    }
+}
+
+// Open Saved Bills Modal
+function openSavedBillsModal() {
+    document.getElementById('saved-bills-modal').style.display = 'block';
+
+    // Reset to regular mode by default
+    document.getElementById('bills-mode-toggle').checked = false;
+    currentBillsMode = 'regular';
+
+    // LOAD REGULAR BILLS INITIALLY
+    loadSavedBillsList();
+    toggleSettingsSidebar();
+}
+
+
+function closeSavedBillsModal() {
+    document.getElementById('saved-bills-modal').style.display = 'none';
+}
+
+async function loadSavedBillsList() {
+    try {
+        const savedBills = await getAllFromDB('savedBills');
+        const billsList = document.getElementById('saved-bills-list');
+        billsList.innerHTML = '';
+
+        if (savedBills.length === 0) {
+            billsList.innerHTML = '<div class="saved-bill-card">No regular bills saved yet</div>';
+            return;
+        }
+
+        savedBills.sort((a, b) => b.value.timestamp - a.value.timestamp);
+
+        savedBills.forEach(bill => {
+            const billCard = document.createElement('div');
+            billCard.className = 'saved-bill-card';
+            billCard.innerHTML = `
+                <div class="saved-bill-header">
+                    <div class="saved-bill-title">${bill.value.title}</div>
+                    <div class="saved-bill-total">₹${bill.value.totalAmount}</div>
+                </div>
+                <div class="saved-bill-details">
+                    <div>Date: ${bill.value.date}</div>
+                    <div>Customer: ${bill.value.customer?.name || 'N/A'}</div>
+                    <div>Items: ${bill.value.items?.length || bill.value.itemCount || 0}</div>
+                </div>
+                <div class="saved-bill-actions">
+                    <button class="btn-edit" onclick="editSavedBill('${bill.id}', 'regular', event)">
+                        <i class="material-icons">edit</i> Edit
+                    </button>
+                    <button class="btn-delete" onclick="deleteSavedBill('${bill.id}', 'regular', event)">
+                        <i class="material-icons">delete</i> Delete
+                    </button>
+                </div>
+            `;
+
+            // FIX: Change loadGSTSavedBill to loadSavedBill for regular bills
+            billCard.addEventListener('click', (e) => {
+                if (!e.target.closest('.saved-bill-actions')) {
+                    resetEditMode(); // Ensure edit mode is off
+                    loadSavedBill(bill.id); // FIXED: Use loadSavedBill instead of loadGSTSavedBill
+                    closeSavedBillsModal();
+
+                    // Force refresh after a short delay to ensure DOM is updated
+                    setTimeout(() => {
+                        if (isGSTMode) {
+                            copyItemsToGSTBill();
+                            updateGSTTaxCalculation();
+                        }
+                    }, 200);
+                }
+            });
+
+            billsList.appendChild(billCard);
+        });
+    } catch (error) {
+        console.error('Error loading saved bills:', error);
+    }
+}
+
+async function loadSavedBill(billId) {
+    try {
+        const savedBill = await getFromDB('savedBills', billId);
+        if (!savedBill) return;
+
+        await setInDB('billDataManual', 'currentBill', savedBill);
+        await loadFromLocalStorage();
+        saveStateToHistory();
+
+        if (currentView === 'bill') {
+            toggleView();
+        }
+
+        // Don't set edit mode on regular load
+    } catch (error) {
+        console.error('Error loading saved bill:', error);
+    }
+}
+// Add this helper function to format numbers (remove .00 when whole number)
+function formatNumber(value) {
+    const num = parseFloat(value);
+    if (isNaN(num)) return value;
+
+    // Check if it's a whole number (no decimal part or .00)
+    if (num % 1 === 0) {
+        return num.toString(); // Return without decimals
+    } else {
+        return num.toFixed(2); // Return with 2 decimals for non-whole numbers
+    }
+}
+
+function formatParticularsManual(itemName, notes, dimensions = '', quantity = 0, finalQuantity = 0, rate = 0, dimensionType = 'none', dimensionUnit = 'ft', unit = '', discountType = 'none', discountValue = '', toggleStates = null) {
+    let particularsHtml = `<div class="itemNameClass">${itemName}</div>`;
+
+    // Format the values using the helper function
+    const formattedQuantity = formatNumber(quantity);
+    const formattedFinalQuantity = formatNumber(finalQuantity);
+    const formattedRate = formatNumber(rate);
+
+    let calculationText = '';
+    let discountText = '';
+
+    // Build calculation text based on dimension type
+    if (dimensionType !== 'none' && dimensions) {
+        // COUNT ONLY GEOMETRIC DIMENSIONS (ignore quantity)
+        let geometricDimensionsCount = 0;
+
+        switch (dimensionType) {
+            case 'length':
+                geometricDimensionsCount = 1;
+                break;
+            case 'widthXheight':
+            case 'widthXdepth':
+            case 'lengthXdepth':
+            case 'lengthXheight':
+            case 'lengthXwidth':
+                geometricDimensionsCount = 2;
+                break;
+            case 'widthXheightXdepth':
+            case 'lengthXwidthXheight':
+            case 'lengthXheightXdepth':
+            case 'lengthXwidthXdepth':
+                geometricDimensionsCount = 3;
+                break;
+            default:
+                geometricDimensionsCount = 0;
+        }
+
+        // ADJUST for unchecked toggles - only count dimensions that are actually used
+        if (toggleStates) {
+            let actualUsedDimensions = 0;
+
+            switch (dimensionType) {
+                case 'length':
+                    actualUsedDimensions = toggleStates.toggle1 ? 1 : 0;
+                    break;
+                case 'widthXheight':
+                case 'widthXdepth':
+                case 'lengthXdepth':
+                case 'lengthXheight':
+                case 'lengthXwidth':
+                    actualUsedDimensions = (toggleStates.toggle1 ? 1 : 0) + (toggleStates.toggle2 ? 1 : 0);
+                    break;
+                case 'widthXheightXdepth':
+                case 'lengthXwidthXheight':
+                case 'lengthXheightXdepth':
+                case 'lengthXwidthXdepth':
+                    actualUsedDimensions = (toggleStates.toggle1 ? 1 : 0) + (toggleStates.toggle2 ? 1 : 0) + (toggleStates.toggle3 ? 1 : 0);
+                    break;
+            }
+
+            // Use the actual used dimensions count instead of the geometric count
+            geometricDimensionsCount = actualUsedDimensions;
+        }
+
+        // DETERMINE UNIT SUFFIX based on geometric dimensions only
+        let unitSuffix = '';
+        switch (geometricDimensionsCount) {
+            case 1:
+                unitSuffix = dimensionUnit; // Linear
+                break;
+            case 2:
+                unitSuffix = dimensionUnit + '²'; // Area
+                break;
+            case 3:
+                unitSuffix = dimensionUnit + '³'; // Volume
+                break;
+            default:
+                unitSuffix = dimensionUnit; // Fallback
+        }
+
+        calculationText = `${dimensions} X ${formattedQuantity}${unit} = ${formattedFinalQuantity}${unitSuffix}`;
+    } else {
+        calculationText = `${formattedQuantity}${unit} @ ${formattedRate}/${unit}`;
+    }
+
+    // Build discount text based on discount type
+    if (discountType !== 'none' && discountValue) {
+        switch (discountType) {
+            case 'percent_per_unit':
+                discountText = ` (Less : ${discountValue}%/${unit})`;
+                break;
+            case 'amt_per_unit':
+                discountText = ` (Less : ${discountValue}₹/${unit})`;
+                break;
+            case 'percent_on_amount':
+                discountText = ` (Less : ${discountValue}%/amt)`;
+                break;
+            case 'amt_on_amount':
+                discountText = ` (Less : ${discountValue}₹/amt)`;
+                break;
+        }
+    }
+
+    if (dimensionType !== 'none' && showDimensions) {
+        particularsHtml += `<div class="dimensions" style="font-size: 0.8em; color: #666; margin: 5px 0;">${calculationText}${discountText}</div>`;
+    } else if (showDimensions) {
+        particularsHtml += `<div class="dimensions" style="font-size: 0.8em; color: #666; margin: 5px 0;">${calculationText}${discountText}</div>`;
+    }
+
+    if (notes) {
+        particularsHtml += `<p class="notes">${notes}</p>`;
+    }
+    return particularsHtml;
+}
+
+// Add this line in the addRowManual, updateRowManual, and removeRowManual functions
+// After calling updateTotal(), add:
+function refreshCopyTableTotal() {
+    const total = Array.from(document.querySelectorAll('#createListManual tbody tr[data-id]'))
+        .reduce((sum, row) => {
+            const amountCell = row.querySelector('.amount');
+            if (amountCell) {
+                const amountValue = parseFloat(amountCell.textContent) || 0;
+                return sum + amountValue;
+            }
+            return sum;
+        }, 0);
+
+    const copyTotalElement = document.getElementById('copyTotalAmount');
+    if (copyTotalElement) {
+        copyTotalElement.textContent = total.toFixed(2);
+    }
+}
+
+async function addRowManual() {
+    let itemName = document.getElementById("itemNameManual").value.trim();
+    let quantity = parseFloat(document.getElementById("quantityManual").value.trim());
+    let unit = document.getElementById("selectUnit").value.trim();
+    let rate = parseFloat(document.getElementById("rateManual").value.trim());
+
+    // GST Inclusive Logic
+    if (isGSTMode && isGSTInclusive && currentGSTPercent > 0) {
+        // Convert inclusive rate to exclusive rate
+        rate = rate / (1 + currentGSTPercent / 100);
+    }
+
+    const notes = document.getElementById("itemNotesManual").value.trim();
+
+    // Get HSN code if in GST mode
+    let hsnCode = '';
+    let productCode = '';
+    if (isGSTMode) {
+        hsnCode = document.getElementById("hsnCodeManual").value.trim();
+        productCode = document.getElementById("productCodeManual").value.trim();
+    }
+
+    // Get discount values
+    const discountType = document.getElementById("discountType").value;
+    const discountValue = parseFloat(document.getElementById("discountValue").value) || 0;
+
+    // ENSURE DIMENSION VALUES ARE PROPERLY CALCULATED FIRST
+    calculateDimensions();
+
+    // CAPTURE DIMENSION DATA AFTER CALCULATION
+    const currentDimType = currentDimensions.type;
+    const currentDimValues = [...currentDimensions.values];
+    const currentDimUnit = currentDimensions.unit;
+    const currentDimArea = currentDimensions.calculatedArea;
+
+    // CAPTURE TOGGLE STATES - FIX: Properly get toggle states
+    const dim1Toggle = document.getElementById('dimension1-toggle');
+    const dim2Toggle = document.getElementById('dimension2-toggle');
+    const dim3Toggle = document.getElementById('dimension3-toggle');
+    const toggleStates = {
+        toggle1: dim1Toggle ? dim1Toggle.checked : true,
+        toggle2: dim2Toggle ? dim2Toggle.checked : true,
+        toggle3: dim3Toggle ? dim3Toggle.checked : true
+    };
+
+    // Get dimensions display text USING CAPTURED VALUES AND TOGGLE STATES
+    const dimensionText = getDimensionDisplayText(currentDimType, currentDimValues, currentDimUnit, toggleStates);
+
+    // Store original quantity with full precision
+    const originalQuantity = quantity;
+
+    // Calculate base amount without discount
+    let calculatedQuantity = quantity;
+    let baseAmount = 0;
+
+    if (currentDimType !== 'none' && currentDimType !== 'dozen' && currentDimArea > 0) {
+        calculatedQuantity = quantity * currentDimArea;
+        baseAmount = storeWithPrecision(calculatedQuantity * rate);
+    } else if (currentDimType === 'dozen') {
+        calculatedQuantity = quantity / 12;
+        baseAmount = storeWithPrecision(calculatedQuantity * rate);
+    } else {
+        baseAmount = quantity * rate;
+    }
+
+    // CALCULATE DISCOUNT BASED ON DISCOUNT TYPE
+    let discountAmount = 0;
+    let finalAmount = baseAmount;
+
+    if (discountType !== 'none' && discountValue > 0) {
+        switch (discountType) {
+            case 'percent_per_unit':
+                // Discount % per unit: (rate * discount%) * quantity
+                const discountPerUnit = rate * (discountValue / 100);
+                discountAmount = discountPerUnit * (currentDimType !== 'none' && currentDimType !== 'dozen' ? calculatedQuantity : quantity);
+                break;
+            case 'amt_per_unit':
+                // Discount amount per unit: discountValue * quantity
+                discountAmount = discountValue * (currentDimType !== 'none' && currentDimType !== 'dozen' ? calculatedQuantity : quantity);
+                break;
+            case 'percent_on_amount':
+                // Discount % on total amount: baseAmount * discount%
+                discountAmount = baseAmount * (discountValue / 100);
+                break;
+            case 'amt_on_amount':
+                // Discount amount on total amount: fixed discount
+                discountAmount = discountValue;
+                break;
+        }
+
+        // Apply discount to final amount
+        finalAmount = storeWithPrecision(baseAmount - discountAmount);
+
+        // Ensure final amount doesn't go below 0
+        if (finalAmount < 0) finalAmount = 0;
+    }
+
+    if (isNaN(quantity) || isNaN(rate) || !itemName) {
+        return;
+    }
+
+    const id = 'row-manual-' + rowCounterManual++;
+
+    // Create rows with the CAPTURED dimension data, toggle states, and discount calculation
+    const row1 = createTableRowManual(
+        id,
+        itemName,
+        calculatedQuantity.toFixed(8),
+        unit,
+        rate,
+        finalAmount,
+        notes,
+        dimensionText,
+        true,
+        calculatedQuantity,
+        currentDimType,
+        originalQuantity,
+        {
+            values: currentDimValues,
+            toggle1: toggleStates.toggle1,
+            toggle2: toggleStates.toggle2,
+            toggle3: toggleStates.toggle3
+        },
+        currentDimUnit,
+        hsnCode,
+        productCode,
+        discountType,
+        discountValue
+    );
+
+    // Store amount with high precision
+    row1.setAttribute('data-amount', storeWithPrecision(finalAmount));
+    row1.setAttribute('data-rate', storeWithPrecision(rate));
+    const row2 = createTableRowManual(
+        id,
+        itemName,
+        calculatedQuantity.toFixed(8),
+        unit,
+        rate,
+        finalAmount,
+        notes,
+        dimensionText,
+        false,
+        calculatedQuantity,
+        currentDimType,
+        originalQuantity,
+        {
+            values: currentDimValues,
+            toggle1: toggleStates.toggle1,
+            toggle2: toggleStates.toggle2,
+            toggle3: toggleStates.toggle3
+        },
+        currentDimUnit,
+        hsnCode,
+        productCode,
+        discountType,
+        discountValue
+    );
+
+    document.getElementById("createListManual").querySelector('tbody').appendChild(row1);
+    document.getElementById("copyListManual").querySelector('tbody').appendChild(row2);
+
+    // FIX: Always copy items to GST table when in GST mode
+    if (isGSTMode) {
+        copyItemsToGSTBill();
+        updateGSTTaxCalculation();
+    }
+
+    updateSerialNumbers();
+    updateTotal();
+    refreshCopyTableTotal();
+    await saveToLocalStorage();
+    saveStateToHistory();
+
+    // Clear input fields including HSN fields
+    document.getElementById("itemNameManual").value = "";
+    document.getElementById("quantityManual").value = "";
+    document.getElementById("rateManual").value = "";
+    document.getElementById("itemNotesManual").value = "";
+    document.getElementById("dimension1").value = "";
+    document.getElementById("dimension2").value = "";
+    document.getElementById("dimension3").value = "";
+
+    // Clear discount fields
+    document.getElementById("discountType").value = "none";
+    document.getElementById("discountValue").value = "";
+
+    if (isGSTMode) {
+        document.getElementById("hsnCodeManual").value = "";
+        document.getElementById("productCodeManual").value = "";
+    }
+
+    // Reset dimension inputs
+    document.getElementById('dimensionType').value = 'none';
+    document.getElementById('measurementUnit').style.display = 'none';
+    document.getElementById('dimensionInputs').style.display = 'none';
+
+    // Reset currentDimensions AFTER creating the rows
+    currentDimensions = {
+        type: 'none',
+        unit: 'ft',
+        values: [0, 0, 0],
+        calculatedArea: 0
+    };
+
+    document.getElementById("itemNameManual").focus();
+}
+
+async function updateRowManual() {
+    if (!currentlyEditingRowIdManual) return;
+
+    let itemName = document.getElementById("itemNameManual").value.trim();
+
+    // FIX: Get and format the quantity properly
+    let quantityInput = document.getElementById("quantityManual").value.trim();
+    let quantity = parseFloat(quantityInput);
+
+    let unit = document.getElementById("selectUnit").value.trim();
+    let rate = parseFloat(document.getElementById("rateManual").value.trim());
+
+    // GST Inclusive Logic
+    if (isGSTMode && isGSTInclusive && currentGSTPercent > 0) {
+        // Convert inclusive rate to exclusive rate
+        rate = rate / (1 + currentGSTPercent / 100);
+    }
+    const notes = document.getElementById("itemNotesManual").value.trim();
+
+    // Get HSN code if in GST mode
+    let hsnCode = '';
+    let productCode = '';
+    if (isGSTMode) {
+        hsnCode = document.getElementById("hsnCodeManual").value.trim();
+        productCode = document.getElementById("productCodeManual").value.trim();
+    }
+
+    // Get discount values
+    const discountType = document.getElementById("discountType").value;
+    const discountValue = parseFloat(document.getElementById("discountValue").value) || 0;
+
+    // FIX: Define dimensionType BEFORE using it
+    const dimensionType = currentDimensions.type;
+
+    // FIX: Get dimension toggle states safely - CAPTURE CURRENT STATE FROM FORM
+    const dim1Toggle = document.getElementById('dimension1-toggle');
+    const dim2Toggle = document.getElementById('dimension2-toggle');
+    const dim3Toggle = document.getElementById('dimension3-toggle');
+    const toggleStates = {
+        toggle1: dim1Toggle ? dim1Toggle.checked : true,
+        toggle2: dim2Toggle ? dim2Toggle.checked : true,
+        toggle3: dim3Toggle ? dim3Toggle.checked : true
+    };
+
+    // FIX: CAPTURE CURRENT DIMENSION INPUT VALUES (not from currentDimensions object)
+    const dim1Value = parseFloat(document.getElementById('dimension1').value) || 0;
+    const dim2Value = parseFloat(document.getElementById('dimension2').value) || 0;
+    const dim3Value = parseFloat(document.getElementById('dimension3').value) || 0;
+
+    // FORMAT VALUES BEFORE USING THEM (ensure consistency)
+    document.getElementById('dimension1').value = dim1Value.toFixed(2);
+    document.getElementById('dimension2').value = dim2Value.toFixed(2);
+    document.getElementById('dimension3').value = dim3Value.toFixed(2);
+
+    // Update currentDimensions with the formatted values
+    currentDimensions.values = [dim1Value, dim2Value, dim3Value];
+
+    // Recalculate dimensions with the actual input values
+    calculateDimensions();
+
+    // FIX: Get dimension text with current toggle states and ACTUAL VALUES - NOW dimensionType is defined
+    const dimensionText = getDimensionDisplayText(dimensionType, currentDimensions.values, currentDimensions.unit, toggleStates);
+
+    const originalQuantity = quantity; // Store the parsed quantity
+
+    // Calculate base amount without discount
+    let calculatedQuantity = quantity;
+    let baseAmount = 0;
+
+    if (currentDimensions.type !== 'none' && currentDimensions.type !== 'dozen' && currentDimensions.calculatedArea > 0) {
+        calculatedQuantity = quantity * currentDimensions.calculatedArea;
+        baseAmount = storeWithPrecision(calculatedQuantity * rate);
+    } else if (currentDimensions.type === 'dozen') {
+        calculatedQuantity = quantity / 12;
+        baseAmount = storeWithPrecision(calculatedQuantity * rate);
+    } else {
+        baseAmount = quantity * rate;
+    }
+
+    // CALCULATE DISCOUNT BASED ON DISCOUNT TYPE
+    let discountAmount = 0;
+    let finalAmount = baseAmount;
+
+    if (discountType !== 'none' && discountValue > 0) {
+        switch (discountType) {
+            case 'percent_per_unit':
+                // Discount % per unit: (rate * discount%) * quantity
+                const discountPerUnit = rate * (discountValue / 100);
+                discountAmount = discountPerUnit * (currentDimensions.type !== 'none' && currentDimensions.type !== 'dozen' ? calculatedQuantity : quantity);
+                break;
+            case 'amt_per_unit':
+                // Discount amount per unit: discountValue * quantity
+                discountAmount = discountValue * (currentDimensions.type !== 'none' && currentDimensions.type !== 'dozen' ? calculatedQuantity : quantity);
+                break;
+            case 'percent_on_amount':
+                // Discount % on total amount: baseAmount * discount%
+                discountAmount = baseAmount * (discountValue / 100);
+                break;
+            case 'amt_on_amount':
+                // Discount amount on total amount: fixed discount
+                discountAmount = discountValue;
+                break;
+        }
+
+        // Apply discount to final amount
+        finalAmount = storeWithPrecision(baseAmount - discountAmount);
+
+        // Ensure final amount doesn't go below 0
+        if (finalAmount < 0) finalAmount = 0;
+    }
+
+    if (isNaN(quantity) || isNaN(rate) || !itemName) {
+        return;
+    }
+
+    // FIX: Define ALL variables that are used in formatParticularsManual call
+    const numericRate = typeof rate === 'string' ? parseFloat(rate) : Number(rate);
+    const amount = finalAmount; // Use the finalAmount that's calculated above
+    const numericAmount = typeof amount === 'string' ? parseFloat(amount) : Number(amount);
+    const dimensionUnit = currentDimensions.unit; // This was missing!
+
+    // FIX: Define formattedDisplayQuantity properly
+    const formattedDisplayQuantity = originalQuantity % 1 === 0 ?
+        originalQuantity.toString() :
+        originalQuantity.toFixed(2);
+
+    // FIX: Calculate finalQuantity (missing from updateRowManual)
+    let finalQuantity = calculatedQuantity;
+    if (currentDimensions.type !== 'none' && currentDimensions.type !== 'dozen' && currentDimensions.calculatedArea > 0) {
+        finalQuantity = quantity * currentDimensions.calculatedArea;
+    } else if (currentDimensions.type === 'dozen') {
+        finalQuantity = quantity / 12;
+    } else {
+        finalQuantity = quantity;
+    }
+
+    // Now use all the properly defined variables
+    let particularsHtml = formatParticularsManual(itemName, notes, dimensionText, formattedDisplayQuantity, finalQuantity, numericRate, dimensionType, dimensionUnit, unit, discountType, discountValue, toggleStates);
+
+    // Update regular tables
+    const rows = document.querySelectorAll(`tr[data-id="${currentlyEditingRowIdManual}"]`);
+    rows.forEach(row => {
+        const cells = row.children;
+        cells[1].innerHTML = particularsHtml;
+
+        // FIX: Use formatted quantity in display
+        const formattedQuantity = originalQuantity % 1 === 0 ?
+            originalQuantity.toString() :
+            originalQuantity.toFixed(2);
+        cells[2].textContent = formattedQuantity;
+
+        cells[3].textContent = unit;
+        cells[4].textContent = parseFloat(rate).toFixed(2);
+        cells[5].textContent = roundToTwoDecimals(finalAmount).toFixed(2);
+
+        // ADD THESE LINES:
+        row.setAttribute('data-amount', storeWithPrecision(finalAmount));
+        row.setAttribute('data-rate', storeWithPrecision(rate));
+
+        row.setAttribute('data-dimension-type', dimensionType);
+        row.setAttribute('data-dimension-values', JSON.stringify([...currentDimensions.values]));
+        row.setAttribute('data-dimension-unit', currentDimensions.unit);
+        row.setAttribute('data-dimension-toggles', JSON.stringify(toggleStates)); // FIX: Save current toggle states
+        row.setAttribute('data-original-quantity', originalQuantity.toFixed(8));
+
+        // Update HSN data if in GST mode
+        if (isGSTMode) {
+            row.setAttribute('data-hsn', hsnCode);
+            row.setAttribute('data-product-code', productCode);
+        }
+
+        // Update discount data attributes
+        row.setAttribute('data-discount-type', discountType);
+        row.setAttribute('data-discount-value', discountValue);
+    });
+
+    // FIX: Always update GST table when in GST mode
+    if (isGSTMode) {
+        copyItemsToGSTBill();
+        updateGSTTaxCalculation();
+    }
+
+    updateSerialNumbers();
+    updateTotal();
+    await saveToLocalStorage();
+    saveStateToHistory();
+
+    // Clear input fields including HSN fields
+    document.getElementById("itemNameManual").value = "";
+    document.getElementById("quantityManual").value = "";
+    document.getElementById("rateManual").value = "";
+    document.getElementById("itemNotesManual").value = "";
+    document.getElementById("dimension1").value = "";
+    document.getElementById("dimension2").value = "";
+    document.getElementById("dimension3").value = "";
+
+    // Clear discount fields
+    document.getElementById("discountType").value = "none";
+    document.getElementById("discountValue").value = "";
+
+    if (isGSTMode) {
+        document.getElementById("hsnCodeManual").value = "";
+        document.getElementById("productCodeManual").value = "";
+    }
+
+    document.getElementById('dimensionType').value = 'none';
+    document.getElementById('measurementUnit').style.display = 'none';
+    document.getElementById('dimensionInputs').style.display = 'none';
+    currentDimensions = {
+        type: 'none',
+        unit: 'ft',
+        values: [0, 0, 0],
+        calculatedArea: 0
+    };
+
+    document.getElementById("addItemBtnManual").style.display = "inline-block";
+    document.getElementById("updateItemBtnManual").style.display = "none";
+    currentlyEditingRowIdManual = null;
+    document.getElementById("itemNameManual").focus();
+}
+
+// Helper function to calculate area from dimensions considering toggle states
+function calculateAreaWithToggles(dimensionType, dimensionValues, toggleStates) {
+    const [v1, v2, v3] = dimensionValues;
+
+    // Apply toggle states - if unchecked, use 1 (no effect on multiplication)
+    const effectiveV1 = toggleStates.toggle1 ? v1 : 1;
+    const effectiveV2 = toggleStates.toggle2 ? v2 : 1;
+    const effectiveV3 = toggleStates.toggle3 ? v3 : 1;
+
+    switch (dimensionType) {
+        case 'length':
+            return effectiveV1;
+        case 'widthXheight':
+            return effectiveV1 * effectiveV2;
+        case 'widthXheightXdepth':
+            return effectiveV1 * effectiveV2 * effectiveV3;
+        case 'lengthXwidthXheight':
+            return effectiveV1 * effectiveV2 * effectiveV3;
+        case 'widthXdepth':
+            return effectiveV1 * effectiveV2;
+        case 'lengthXheightXdepth':
+            return effectiveV1 * effectiveV2 * effectiveV3;
+        case 'lengthXdepth':
+            return effectiveV1 * effectiveV2;
+        case 'lengthXheight':
+            return effectiveV1 * effectiveV2;
+        case 'lengthXwidth':
+            return effectiveV1 * effectiveV2;
+        case 'lengthXwidthXdepth':
+            return effectiveV1 * effectiveV2 * effectiveV3;
+        default:
+            return 1;
+    }
+}
+
+function duplicateRow(rowId) {
+    const sourceRow = document.querySelector(`#createListManual tr[data-id="${rowId}"]`);
+    if (!sourceRow) return;
+
+    // Get all data from source row
+    const cells = sourceRow.children;
+    const particularsDiv = cells[1];
+    const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
+    const notes = particularsDiv.querySelector('.notes')?.textContent || '';
+
+    const dimensionType = sourceRow.getAttribute('data-dimension-type') || 'none';
+    const dimensionValues = JSON.parse(sourceRow.getAttribute('data-dimension-values') || '[0,0,0]');
+    const dimensionUnit = sourceRow.getAttribute('data-dimension-unit') || 'ft';
+
+    // FIX: PROPERLY get toggle states from data attribute
+    const toggleStatesAttr = sourceRow.getAttribute('data-dimension-toggles');
+    let toggleStates;
+    try {
+        toggleStates = toggleStatesAttr && toggleStatesAttr !== 'undefined' ? JSON.parse(toggleStatesAttr) : { toggle1: true, toggle2: true, toggle3: true };
+    } catch (e) {
+        console.warn('Invalid toggle states, using defaults:', e);
+        toggleStates = { toggle1: true, toggle2: true, toggle3: true };
+    }
+
+    const originalQuantity = parseFloat(sourceRow.getAttribute('data-original-quantity') || cells[2].textContent);
+
+    const hsnCode = sourceRow.getAttribute('data-hsn') || '';
+    const productCode = sourceRow.getAttribute('data-product-code') || '';
+    const discountType = sourceRow.getAttribute('data-discount-type') || 'none';
+    const discountValue = sourceRow.getAttribute('data-discount-value') || '';
+
+    const unit = cells[3].textContent;
+    const rate = parseFloat(cells[4].textContent);
+    const amount = parseFloat(cells[5].textContent);
+
+    // Create new unique ID
+    const newId = 'row-manual-' + rowCounterManual++;
+
+    // FIX: Calculate final quantity using ACTUAL TOGGLE STATES
+    let finalQuantity = originalQuantity;
+    if (dimensionType !== 'none' && dimensionType !== 'dozen') {
+        // Calculate area considering toggle states
+        const calculatedArea = calculateAreaWithToggles(dimensionType, dimensionValues, toggleStates);
+        finalQuantity = originalQuantity * calculatedArea;
+    } else if (dimensionType === 'dozen') {
+        finalQuantity = originalQuantity / 12;
+    }
+
+    // FIX: Get dimension text for display using actual toggle states
+    const dimensionText = getDimensionDisplayText(dimensionType, dimensionValues, dimensionUnit, toggleStates);
+
+    // Create duplicate row with PROPER TOGGLE STATES
+    const newRow = createTableRowManual(
+        newId,
+        itemName,
+        originalQuantity.toFixed(8),
+        unit,
+        rate,
+        amount,
+        notes,
+        dimensionText,
+        true,
+        finalQuantity,
+        dimensionType,
+        originalQuantity,
+        {
+            values: dimensionValues,
+            toggle1: toggleStates.toggle1,
+            toggle2: toggleStates.toggle2,
+            toggle3: toggleStates.toggle3
+        },
+        dimensionUnit,
+        hsnCode,
+        productCode,
+        discountType,
+        discountValue
+    );
+
+    // Insert the duplicate below the source row
+    sourceRow.parentNode.insertBefore(newRow, sourceRow.nextSibling);
+
+    // Sync to other tables with PROPER TOGGLE STATES
+    syncDuplicatedRowToOtherTables(newId, sourceRow, itemName, originalQuantity, unit, rate, amount, notes, dimensionType, dimensionValues, dimensionUnit, hsnCode, productCode, discountType, discountValue, finalQuantity, dimensionText, toggleStates);
+
+    // Update everything
+    updateSerialNumbers();
+    updateTotal();
+    saveToLocalStorage();
+    saveStateToHistory();
+
+    if (isGSTMode) {
+        updateGSTTaxCalculation();
+    }
+}
+
+// Helper function to calculate area from dimensions (add if not exists)
+function calculateAreaFromDimensions(dimensionType, dimensionValues) {
+    const [v1, v2, v3] = dimensionValues;
+    switch (dimensionType) {
+        case 'length':
+            return v1;
+        case 'widthXheight':
+            return v1 * v2;
+        case 'widthXheightXdepth':
+            return v1 * v2 * v3;
+        default:
+            return 1;
+    }
+}
+
+// Sync duplicated row to other tables with toggle states
+function syncDuplicatedRowToOtherTables(newId, sourceRow, itemName, quantity, unit, rate, amount, notes, dimensionType, dimensionValues, dimensionUnit, hsnCode, productCode, discountType, discountValue, finalQuantity, dimensionText, toggleStates) {
+    // Sync to copyListManual (regular bill table)
+    const copySourceRow = document.querySelector(`#copyListManual tr[data-id="${sourceRow.getAttribute('data-id')}"]`);
+    if (copySourceRow) {
+        const copyRow = createTableRowManual(
+            newId,
+            itemName,
+            quantity.toFixed(8),
+            unit,
+            rate,
+            amount,
+            notes,
+            dimensionText,
+            false,
+            finalQuantity,
+            dimensionType,
+            quantity,
+            {
+                values: dimensionValues,
+                toggle1: toggleStates.toggle1,
+                toggle2: toggleStates.toggle2,
+                toggle3: toggleStates.toggle3
+            },
+            dimensionUnit,
+            hsnCode,
+            productCode,
+            discountType,
+            discountValue
+        );
+        copySourceRow.parentNode.insertBefore(copyRow, copySourceRow.nextSibling);
+    }
+
+    // Sync to GST table if in GST mode
+    if (isGSTMode) {
+        const gstSourceRow = document.querySelector(`#gstCopyListManual tr[data-id="${sourceRow.getAttribute('data-id')}"]`);
+        if (gstSourceRow) {
+            const gstRow = createGSTTableRowManual(
+                newId,
+                itemName,
+                quantity.toFixed(8),
+                unit,
+                rate,
+                amount,
+                notes,
+                dimensionText,
+                false,
+                finalQuantity,
+                dimensionType,
+                quantity,
+                dimensionValues,
+                dimensionUnit,
+                hsnCode,
+                productCode
+            );
+            gstSourceRow.parentNode.insertBefore(gstRow, gstSourceRow.nextSibling);
+        }
+    }
+}
+
+function toggleRowDimensions(rowId) {
+    const rows = document.querySelectorAll(`tr[data-id="${rowId}"]`);
+    const isCurrentlyVisible = document.querySelector(`#createListManual tr[data-id="${rowId}"]`)?.getAttribute('data-dimensions-visible') === 'true';
+    const newVisibilityState = !isCurrentlyVisible;
+
+    rows.forEach(row => {
+        const particularsCell = row.children[1];
+        const dimensionsDiv = particularsCell.querySelector('.dimensions');
+
+        if (dimensionsDiv) {
+            if (newVisibilityState) {
+                // Show dimensions
+                dimensionsDiv.style.display = 'block';
+                row.setAttribute('data-dimensions-visible', 'true');
+            } else {
+                // Hide dimensions
+                dimensionsDiv.style.display = 'none';
+                row.setAttribute('data-dimensions-visible', 'false');
+            }
+        }
+
+        // Only update the toggle button icon in the input table (where it exists)
+        if (row.closest('#createListManual')) {
+            const dimensionsBtn = row.querySelector('.dimensions-btn .material-icons');
+            if (dimensionsBtn) {
+                dimensionsBtn.textContent = newVisibilityState ? 'layers' : 'layers_clear';
+            }
+        }
+    });
+
+    saveToLocalStorage();
+    saveStateToHistory(); // ADDED: Capture dimension toggle in undo/redo history
+}
+function createTableRowManual(id, itemName, quantity, unit, rate, amount, notes, dimensions, editable, finalQuantity = 0, dimensionType = 'none', originalQuantity = 0, dimensionData = { values: [0, 0, 0], toggle1: true, toggle2: true, toggle3: true }, dimensionUnit = 'ft', hsnCode = '', productCode = '', discountType = 'none', discountValue = '', dimensionsVisible = true) { // ADD dimensionsVisible parameter
+    const tr = document.createElement("tr");
+    tr.setAttribute("data-id", id);
+
+    // Add drag listeners to ALL rows
+    addDragAndDropListeners(tr);
+
+    // Only add click listener for editing to input table rows
+    if (editable) {
+        tr.addEventListener('click', () => editRowManual(id));
+    }
+
+    // Extract dimension values and toggle states
+    const dimensionValues = dimensionData.values || [0, 0, 0];
+    const toggleStates = {
+        toggle1: dimensionData.toggle1 !== false,
+        toggle2: dimensionData.toggle2 !== false,
+        toggle3: dimensionData.toggle3 !== false
+    };
+
+    // FIX: Format display quantity - remove .00 if whole number
+    const displayQuantity = parseFloat(originalQuantity > 0 ? originalQuantity : quantity);
+    const formattedDisplayQuantity = displayQuantity % 1 === 0 ?
+        displayQuantity.toString() :
+        displayQuantity.toFixed(2);
+
+    // SAFELY handle rate conversion to number
+    const numericRate = typeof rate === 'string' ? parseFloat(rate) : Number(rate);
+    const numericAmount = typeof amount === 'string' ? parseFloat(amount) : Number(amount);
+
+
+    let particularsHtml = formatParticularsManual(itemName, notes, dimensions, displayQuantity, finalQuantity, numericRate, dimensionType, dimensionUnit, unit, discountType, discountValue, toggleStates);
+
+    const removeFn = editable ? `removeRowManual('${id}')` : `removeRowManual('${id}', true)`;
+
+    // Create actions HTML with three buttons
+    let actionsHtml = '';
+    if (editable) {
+        actionsHtml = `
+            <div class="action-buttons">
+                <button onclick="duplicateRow('${id}')" class="action-btn copy-btn" title="Duplicate Item">
+                    <span class="material-icons">content_copy</span>
+                </button>
+                <button onclick="toggleRowDimensions('${id}')" class="action-btn dimensions-btn" title="Toggle Dimensions">
+                    <span class="material-icons">${dimensionsVisible ? 'layers' : 'layers_clear'}</span> <!-- FIX: Set correct icon -->
+                </button>
+                <button onclick="${removeFn}" class="action-btn remove-btn" title="Remove Item">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
+        `;
+    } else {
+        actionsHtml = `<button onclick="${removeFn}" class="remove-btn"><span class="material-icons">close</span></button>`;
+    }
+
+    tr.innerHTML = `
+    <td class="sr-no"></td>
+    <td>${particularsHtml}</td>
+    <td>${formattedDisplayQuantity}</td>  <!-- FIXED: Using formatted quantity -->
+    <td>${unit}</td>
+    <td>${numericRate.toFixed(2)}</td>
+    <td class="amount">${numericAmount.toFixed(2)}</td>
+    <td class="actions-cell">${actionsHtml}</td>
+`;
+
+    // Set dimension attributes including toggle states - FIX: Properly save toggle states
+    tr.setAttribute('data-dimension-type', dimensionType);
+    tr.setAttribute('data-dimension-values', JSON.stringify(dimensionValues));
+    tr.setAttribute('data-dimension-unit', dimensionUnit);
+    tr.setAttribute('data-dimension-toggles', JSON.stringify(toggleStates)); // FIX: Save toggle states
+    tr.setAttribute('data-original-quantity', displayQuantity.toFixed(8));
+
+    // SAFELY store original rate as number
+    tr.setAttribute('data-original-rate', numericRate.toFixed(8));
+
+    // ADD THESE LINES:
+    tr.setAttribute('data-amount', storeWithPrecision(numericAmount));
+    tr.setAttribute('data-rate', storeWithPrecision(numericRate));
+
+    // ADD THIS: Set dimension visibility attribute
+    tr.setAttribute('data-dimensions-visible', dimensionsVisible ? 'true' : 'false');
+
+    // Add HSN and product code data if provided
+    if (hsnCode) {
+        tr.setAttribute('data-hsn', hsnCode);
+    }
+    if (productCode) {
+        tr.setAttribute('data-product-code', productCode);
+    }
+
+    // Add discount data attributes
+    tr.setAttribute('data-discount-type', discountType);
+    tr.setAttribute('data-discount-value', discountValue);
+
+    return tr;
+}
+
+function createGSTTableRowManual(id, itemName, quantity, unit, rate, amount, notes, dimensions, editable, finalQuantity = 0, dimensionType = 'none', originalQuantity = 0, dimensionValues = [0, 0, 0], dimensionUnit = 'ft', hsnCode = '', productCode = '') {
+    const tr = document.createElement("tr");
+    tr.setAttribute("data-id", id);
+
+    // FIX: Format display quantity - remove .00 if whole number
+    const displayQuantity = parseFloat(originalQuantity > 0 ? originalQuantity : quantity);
+    const formattedDisplayQuantity = displayQuantity % 1 === 0 ?
+        displayQuantity.toString() :
+        displayQuantity.toFixed(2);
+
+    // SAFELY handle rate conversion to number
+    const numericRate = typeof rate === 'string' ? parseFloat(rate) : Number(rate);
+    const numericAmount = typeof amount === 'string' ? parseFloat(amount) : Number(amount);
+
+    let particularsHtml = formatParticularsManual(itemName, notes, dimensions, displayQuantity, finalQuantity, numericRate, dimensionType, dimensionUnit, unit);
+
+    const removeFn = `removeRowManual('${id}', true)`;
+
+    // Updated order: Particulars first, then HSN/SAC
+    tr.innerHTML = `
+    <td class="sr-no"></td>
+    <td>${particularsHtml}</td>
+    <td>${hsnCode}</td>
+    <td>${formattedDisplayQuantity}</td>  <!-- FIXED: Using formatted quantity -->
+    <td>${unit}</td>
+    <td>${numericRate.toFixed(2)}</td>
+    <td class="amount">${numericAmount.toFixed(2)}</td>
+    <td><button onclick="${removeFn}" class="remove-btn"><span class="material-icons">close</span></button></td>
+`;
+
+    tr.setAttribute('data-dimension-type', dimensionType);
+    tr.setAttribute('data-dimension-values', JSON.stringify(dimensionValues));
+    tr.setAttribute('data-dimension-unit', dimensionUnit);
+    tr.setAttribute('data-original-quantity', displayQuantity.toFixed(8));
+    tr.setAttribute('data-hsn', hsnCode);
+    if (productCode) {
+        tr.setAttribute('data-product-code', productCode);
+    }
+
+    return tr;
+}
+
+function removeRowManual(id) {
+    // Remove from regular tables
+    document.querySelectorAll(`tr[data-id="${id}"]`).forEach(row => row.remove());
+
+    // Remove from GST table if exists
+    const gstRows = document.querySelectorAll(`#gstCopyListManual tr[data-id="${id}"]`);
+    gstRows.forEach(row => row.remove());
+
+    // FIX: Update GST table and calculations when in GST mode
+    if (isGSTMode) {
+        copyItemsToGSTBill();
+        updateGSTTaxCalculation();
+    }
+
+    updateSerialNumbers();
+    updateTotal();
+    // In addRowManual, updateRowManual, removeRowManual functions:
+    // After updateTotal(); add:
+    refreshCopyTableTotal();
+    saveToLocalStorage();
+    saveStateToHistory();
+}
+
+function editRowManual(id) {
+    // Prevent editing if click came from action buttons
+    if (window.event) {
+        const target = window.event.target;
+        if (target.closest('.action-buttons') || target.closest('.action-btn')) {
+            return;
+        }
+    }
+
+    const row = document.querySelector(`#createListManual tr[data-id="${id}"]`);
+    if (!row) return;
+    currentlyEditingRowIdManual = id;
+    const cells = row.children;
+    const particularsDiv = cells[1];
+    const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
+    const notesText = particularsDiv.querySelector('.notes')?.textContent || '';
+
+    const dimensionType = row.getAttribute('data-dimension-type') || 'none';
+    const dimensionValues = JSON.parse(row.getAttribute('data-dimension-values') || '[0,0,0]');
+    const dimensionUnit = row.getAttribute('data-dimension-unit') || 'ft';
+
+    // FIX: Safe JSON parsing for dimension toggles
+    const toggleStatesAttr = row.getAttribute('data-dimension-toggles');
+    let toggleStates;
+    try {
+        toggleStates = toggleStatesAttr && toggleStatesAttr !== 'undefined' ? JSON.parse(toggleStatesAttr) : { toggle1: true, toggle2: true, toggle3: true };
+    } catch (e) {
+        console.warn('Invalid toggle states in editRowManual, using defaults:', e);
+        toggleStates = { toggle1: true, toggle2: true, toggle3: true };
+    }
+
+    const originalQuantity = parseFloat(row.getAttribute('data-original-quantity') || cells[2].textContent);
+
+    // Get HSN, product code, and discount from data attributes
+    const hsnCode = row.getAttribute('data-hsn') || '';
+    const productCode = row.getAttribute('data-product-code') || '';
+    const discountType = row.getAttribute('data-discount-type') || 'none';
+    const discountValue = row.getAttribute('data-discount-value') || '';
+
+    // Populate all fields
+    document.getElementById("itemNameManual").value = itemName;
+
+    // FIX: Format quantity - remove .00 if whole number
+    const formattedQuantity = originalQuantity % 1 === 0 ?
+        originalQuantity.toString() :
+        originalQuantity.toFixed(2);
+    document.getElementById("quantityManual").value = formattedQuantity;
+
+    document.getElementById("selectUnit").value = cells[3].textContent;
+    document.getElementById("rateManual").value = parseFloat(cells[4].textContent).toFixed(2);
+    document.getElementById("itemNotesManual").value = notesText;
+
+    // Populate HSN and product code fields
+    document.getElementById("hsnCodeManual").value = hsnCode;
+    document.getElementById("productCodeManual").value = productCode;
+
+    // Populate discount fields
+    document.getElementById("discountType").value = discountType;
+    document.getElementById("discountValue").value = discountValue;
+
+    document.getElementById('dimensionType').value = dimensionType;
+    handleDimensionTypeChange();
+
+    // FIX: Only populate dimension values if they are non-zero and the item actually has dimensions
+    if (dimensionType !== 'none' && dimensionType !== 'dozen') {
+        document.getElementById('measurementUnit').value = dimensionUnit;
+        currentDimensions.unit = dimensionUnit;
+
+        // Only set dimension values if they are non-zero (item actually has dimensions)
+        // If all dimension values are 0, leave the inputs blank
+        const hasActualDimensions = dimensionValues.some(val => val > 0);
+
+        if (hasActualDimensions) {
+            document.getElementById('dimension1').value = parseFloat(dimensionValues[0]).toFixed(2);
+            if (dimensionType === 'widthXheight' || dimensionType === 'widthXheightXdepth' ||
+                dimensionType === 'lengthXwidthXheight' || dimensionType === 'widthXdepth' ||
+                dimensionType === 'lengthXheightXdepth' || dimensionType === 'lengthXdepth' ||
+                dimensionType === 'lengthXheight' || dimensionType === 'lengthXwidth' ||
+                dimensionType === 'lengthXwidthXdepth') {
+                document.getElementById('dimension2').value = parseFloat(dimensionValues[1]).toFixed(2);
+            }
+            if (dimensionType === 'widthXheightXdepth' || dimensionType === 'lengthXwidthXheight' ||
+                dimensionType === 'lengthXheightXdepth' || dimensionType === 'lengthXwidthXdepth') {
+                document.getElementById('dimension3').value = parseFloat(dimensionValues[2]).toFixed(2);
+            }
+        } else {
+            // Item originally had no dimensions - leave inputs blank
+            document.getElementById('dimension1').value = '';
+            document.getElementById('dimension2').value = '';
+            document.getElementById('dimension3').value = '';
+        }
+
+        currentDimensions.values = dimensionValues;
+
+        // FIX: Set toggle states from saved data - ONLY if dimension type is not 'none'
+        document.getElementById('dimension1-toggle').checked = toggleStates.toggle1;
+        if (dimensionType === 'widthXheight' || dimensionType === 'widthXheightXdepth' ||
+            dimensionType === 'lengthXwidthXheight' || dimensionType === 'widthXdepth' ||
+            dimensionType === 'lengthXheightXdepth' || dimensionType === 'lengthXdepth' ||
+            dimensionType === 'lengthXheight' || dimensionType === 'lengthXwidth' ||
+            dimensionType === 'lengthXwidthXdepth') {
+            document.getElementById('dimension2-toggle').checked = toggleStates.toggle2;
+        }
+        if (dimensionType === 'widthXheightXdepth' || dimensionType === 'lengthXwidthXheight' ||
+            dimensionType === 'lengthXheightXdepth' || dimensionType === 'lengthXwidthXdepth') {
+            document.getElementById('dimension3-toggle').checked = toggleStates.toggle3;
+        }
+
+        calculateDimensions();
+    }
+
+    document.getElementById("addItemBtnManual").style.display = "none";
+    document.getElementById("updateItemBtnManual").style.display = "inline-block";
+}
+
+function updateSerialNumbers() {
+    const vars = getModeSpecificVars();
+    const createListId = vars.createListId;
+    const copyListId = vars.copyListId;
+
+    // Update all tables including GST table
+    const tables = [createListId, copyListId];
+    if (isGSTMode) {
+        tables.push('gstCopyListManual');
+    }
+
+    tables.forEach(tableId => {
+        const rows = document.querySelectorAll(`#${tableId} tbody tr`);
+        let itemCounter = 0;
+
+        rows.forEach((row) => {
+            const srNoCell = row.querySelector('.sr-no');
+            if (srNoCell) {
+                if (row.classList.contains('section-row')) {
+                    // Section rows get no serial number (blank)
+                    srNoCell.textContent = '';
+                } else if (row.getAttribute('data-id')) {
+                    // Item rows get sequential serial numbers
+                    itemCounter++;
+                    srNoCell.textContent = itemCounter;
+                } else {
+                    // Any other rows get no serial number
+                    srNoCell.textContent = '';
+                }
+            }
+        });
+    });
+}
+
+function updateTotal() {
+    const vars = getModeSpecificVars();
+    const createListId = vars.createListId;
+    const totalAmountId = vars.totalAmountId;
+    const copyTotalAmountId = vars.copyTotalAmountId;
+
+    // Calculate total from input table
+    const total = Array.from(document.querySelectorAll(`#${createListId} tbody tr[data-id]`))
+        .reduce((sum, row) => {
+            const amountCell = row.querySelector('.amount');
+            if (amountCell) {
+                const amountText = amountCell.textContent.trim();
+                const amountValue = parseFloat(amountText);
+                return sum + (isNaN(amountValue) ? 0 : amountValue);
+            }
+            return sum;
+        }, 0);
+
+    // Always update the input table total
+    document.getElementById(totalAmountId).textContent = roundToTwoDecimals(total).toFixed(2);
+
+    // FIX: Always update the copy table total too
+    const copyTotalElement = document.getElementById(copyTotalAmountId);
+    if (copyTotalElement) {
+        copyTotalElement.textContent = roundToTwoDecimals(total).toFixed(2);
+    }
+
+    // FIX: ALWAYS update discount row, regardless of bill container visibility
+    const discountRow = document.getElementById('discount-row');
+    const discountPercentSpan = document.getElementById('discount-percent');
+    const discountAmountTd = document.getElementById('discount-amount');
+
+    // Calculate discount amount based on current discount type
+    let discountAmountValue = 0;
+    if (discountPercent > 0) {
+        // Percent mode: Calculate amount from percent
+        discountAmountValue = storeWithPrecision(total * (discountPercent / 100));
+    } else if (discountAmount > 0) {
+        // Amount mode: Use stored amount directly
+        discountAmountValue = discountAmount;
+        // Percent is already calculated in applyDiscountSettings for display
+    }
+
+    const displayDiscountAmount = roundToTwoDecimals(discountAmountValue);
+
+    // FIX: Always update discount row visibility
+    if ((discountPercent > 0 || discountAmount > 0) && discountAmountValue > 0) {
+        if (discountRow) discountRow.style.display = '';
+        if (discountPercentSpan) discountPercentSpan.textContent = roundToTwoDecimals(discountPercent);
+        if (discountAmountTd) discountAmountTd.textContent = `-${displayDiscountAmount}`;
+
+        if (discountRow && discountRow.cells[0]) {
+            discountRow.cells[0].textContent = `Discount (${roundToTwoDecimals(discountPercent)}%)`;
+        }
+    } else {
+        if (discountRow) discountRow.style.display = 'none';
+    }
+
+    // Only update GST elements if bill container is visible
+    const billContainer = document.getElementById('bill-container');
+    if (billContainer && billContainer.style.display !== 'none') {
+        const gstRow = document.getElementById('gst-row');
+        const gstPercentSpan = document.getElementById('gst-percent');
+        const gstAmountTd = document.getElementById('gst-amount');
+        const grandTotalRow = document.getElementById('grand-total-row');
+        const grandTotalAmount = document.getElementById('grand-total-amount');
+
+        if (gstPercent > 0) {
+            if (gstRow) gstRow.style.display = '';
+            if (gstPercentSpan) gstPercentSpan.textContent = gstPercent;
+
+            // Calculate GST on amount after discount
+            const amountAfterDiscount = total - discountAmountValue;
+            const gstAmount = amountAfterDiscount * (gstPercent / 100);
+
+            if (gstAmountTd) gstAmountTd.textContent = `+${roundToTwoDecimals(gstAmount)}`;
+            if (grandTotalRow) grandTotalRow.style.display = '';
+            if (grandTotalAmount) grandTotalAmount.textContent = roundToTwoDecimals(amountAfterDiscount + gstAmount);
+        } else {
+            if (gstRow) gstRow.style.display = 'none';
+            if (grandTotalRow) grandTotalRow.style.display = 'none';
+        }
+
+        // Show grand total if there's discount but no GST
+        if ((discountPercent > 0 || discountAmount > 0) && gstPercent === 0) {
+            if (grandTotalRow) grandTotalRow.style.display = '';
+            const amountAfterDiscount = total - discountAmountValue;
+            if (grandTotalAmount) grandTotalAmount.textContent = roundToTwoDecimals(amountAfterDiscount);
+        }
+    }
+}
+
+
+// Helper to create items from saved data
+// Helper to create items from saved data
+function createItemInAllTablesFromSaved(itemData) {
+    const createListTbody = document.querySelector("#createListManual tbody");
+    const copyListTbody = document.querySelector("#copyListManual tbody");
+
+    // Create for input table
+    const row1 = createTableRowManual(
+        itemData.id,
+        itemData.itemName,
+        itemData.quantity,
+        itemData.unit,
+        parseFloat(itemData.rate), // Ensure rate is number
+        parseFloat(itemData.amount), // Ensure amount is number
+        itemData.notes,
+        '', // dimension text will come from particularsHtml
+        true,
+        parseFloat(itemData.quantity),
+        itemData.dimensionType,
+        parseFloat(itemData.quantity),
+        {
+            values: itemData.dimensionValues || [0, 0, 0],
+            toggle1: itemData.dimensionToggles?.toggle1 !== false,
+            toggle2: itemData.dimensionToggles?.toggle2 !== false,
+            toggle3: itemData.dimensionToggles?.toggle3 !== false
+        }, // ADDED: Handle toggle states
+        itemData.dimensionUnit,
+        itemData.hsnCode,
+        itemData.productCode,
+        itemData.discountType,
+        itemData.discountValue,
+        // ADD THIS: Pass dimensionsVisible state
+        itemData.dimensionsVisible !== false // Default to true if undefined
+    );
+
+    // Use saved particulars HTML if available
+    if (itemData.particularsHtml) {
+        row1.children[1].innerHTML = itemData.particularsHtml;
+    }
+    if (itemData.displayQuantity) {
+        row1.children[2].textContent = itemData.displayQuantity;
+    }
+
+    createListTbody.appendChild(row1);
+
+    // Create for regular bill table
+    const row2 = createTableRowManual(
+        itemData.id,
+        itemData.itemName,
+        itemData.quantity,
+        itemData.unit,
+        parseFloat(itemData.rate), // Ensure rate is number
+        parseFloat(itemData.amount), // Ensure amount is number
+        itemData.notes,
+        '',
+        false,
+        parseFloat(itemData.quantity),
+        itemData.dimensionType,
+        parseFloat(itemData.quantity),
+        {
+            values: itemData.dimensionValues || [0, 0, 0],
+            toggle1: itemData.dimensionToggles?.toggle1 !== false,
+            toggle2: itemData.dimensionToggles?.toggle2 !== false,
+            toggle3: itemData.dimensionToggles?.toggle3 !== false
+        }, // ADDED: Handle toggle states
+        itemData.dimensionUnit,
+        itemData.hsnCode,
+        itemData.productCode,
+        itemData.discountType,
+        itemData.discountValue,
+        // ADD THIS: Pass dimensionsVisible state
+        itemData.dimensionsVisible !== false // Default to true if undefined
+    );
+
+    if (itemData.particularsHtml) {
+        row2.children[1].innerHTML = itemData.particularsHtml;
+    }
+    if (itemData.displayQuantity) {
+        row2.children[2].textContent = itemData.displayQuantity;
+    }
+
+    copyListTbody.appendChild(row2);
+
+    // Create for GST table if needed
+    if (isGSTMode) {
+        const gstListTbody = document.querySelector("#gstCopyListManual tbody");
+        if (gstListTbody) {
+            const gstRow = createGSTTableRowManual(
+                itemData.id,
+                itemData.itemName,
+                itemData.quantity,
+                itemData.unit,
+                parseFloat(itemData.rate), // Ensure rate is number
+                parseFloat(itemData.amount), // Ensure amount is number
+                itemData.notes,
+                '',
+                false,
+                parseFloat(itemData.quantity),
+                itemData.dimensionType,
+                parseFloat(itemData.quantity),
+                itemData.dimensionValues,
+                itemData.dimensionUnit,
+                itemData.hsnCode,
+                itemData.productCode
+            );
+
+            if (itemData.particularsHtml) {
+                gstRow.children[1].innerHTML = itemData.particularsHtml;
+            }
+            if (itemData.displayQuantity) {
+                gstRow.children[3].textContent = itemData.displayQuantity;
+            }
+
+            gstListTbody.appendChild(gstRow);
+        }
+    }
+}
+
+async function removeSection(sectionId) {
+    const shouldDeleteSection = await showConfirm('Are you sure you want to remove this section? All items under this section will also be removed.');
+    if (shouldDeleteSection) {
+        // Remove from all tables
+        const tables = ['createListManual', 'copyListManual', 'gstCopyListManual'];
+        tables.forEach(tableId => {
+            const sectionRow = document.querySelector(`#${tableId} tr[data-section-id="${sectionId}"]`);
+            if (sectionRow) {
+                // Also remove all items under this section (until next section)
+                let nextRow = sectionRow.nextElementSibling;
+                while (nextRow && !nextRow.classList.contains('section-row')) {
+                    const nextNextRow = nextRow.nextElementSibling;
+                    nextRow.remove();
+                    nextRow = nextNextRow;
+                }
+                // Remove the section row itself
+                sectionRow.remove();
+            }
+        });
+
+        updateSerialNumbers();
+        updateTotal();
+        saveToLocalStorage();
+        saveStateToHistory();
+
+        if (isGSTMode) {
+            updateGSTTaxCalculation();
+        }
+    }
+}
+
+
+// Helper function to create sections from saved data
+function createSectionInAllTablesFromSaved(sectionData) {
+    const tables = ['createListManual', 'copyListManual', 'gstCopyListManual'];
+
+    tables.forEach(tableId => {
+        const table = document.getElementById(tableId);
+        if (!table) return;
+
+        const tbody = table.querySelector('tbody');
+        const tr = document.createElement('tr');
+        tr.className = 'section-row';
+        tr.setAttribute('data-section-id', sectionData.id);
+        tr.setAttribute('draggable', 'true');
+
+        const colspan = tableId === 'gstCopyListManual' ? '8' : '7';
+
+        // FIX: Handle saved HTML differently for input table vs bill view tables
+        if (sectionData.html && tableId === 'createListManual') {
+            // Input table - use saved HTML with buttons
+            tr.innerHTML = `<td colspan="${colspan}" style="${sectionData.style || ''}">${sectionData.html}</td>`;
+        } else if (sectionData.html && (tableId === 'copyListManual' || tableId === 'gstCopyListManual')) {
+            // Bill view tables - extract just the section name from HTML (remove buttons)
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = sectionData.html;
+
+            // Extract just the text content (section name) without buttons
+            let sectionName = '';
+            for (let node of tempDiv.childNodes) {
+                if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+                    sectionName = node.textContent.trim();
+                    break;
+                }
+            }
+
+            // If we couldn't extract the name, fall back to the saved name
+            if (!sectionName) {
+                sectionName = sectionData.name;
+            }
+
+            tr.innerHTML = `
+                <td colspan="${colspan}" style="${sectionData.style || ''}">
+                    ${sectionName}
+                </td>
+            `;
+        } else {
+            // Fallback: create from basic data
+            let content = sectionData.name;
+            if (tableId === 'createListManual') {
+                const buttonText = sectionData.collapsed ? '+' : '−';
+                content = `${sectionData.name} 
+                    <button class="collapse-btn" onclick="toggleSection('${sectionData.id}')">${buttonText}</button>
+                    <button onclick="event.stopPropagation(); removeSection('${sectionData.id}')" class="remove-btn"><span class="material-icons">close</span></button>`;
+            } else {
+                // Bill view tables - show only section name
+                content = sectionData.name;
+            }
+
+            tr.innerHTML = `
+                <td colspan="${colspan}" style="${sectionData.style || ''}">
+                    ${content}
+                </td>
+            `;
+        }
+
+        // ADD DRAG LISTENERS TO SECTION ROW
+        addDragAndDropListeners(tr);
+        tbody.appendChild(tr);
+    });
+}
+
+function loadTermsData(termsData) {
+    // Remove any existing terms first
+    const existingTerms = document.querySelectorAll('.bill-footer-list[data-editable="true"]');
+    existingTerms.forEach(terms => terms.remove());
+
+    // Create new terms from saved data
+    termsData.forEach(terms => {
+        createTermsFromData(terms);
+    });
+}
+
+function createTermsFromData(termsData) {
+    const listContainer = document.createElement('div');
+    listContainer.className = 'bill-footer-list';
+    listContainer.setAttribute('data-editable', 'true');
+
+    let listHTML = `<h4>${termsData.heading}</h4>`;
+    listHTML += `<${termsData.listType} style="list-style-type: ${termsData.listStyle}">`;
+
+    termsData.listItems.forEach(item => {
+        listHTML += `<li>${item}</li>`;
+    });
+
+    listHTML += `</${termsData.listType}>`;
+    listContainer.innerHTML = listHTML;
+
+    // Insert below the appropriate table
+    const billTotalTable = document.getElementById('bill-total-table');
+    const gstBillTotalsTable = document.getElementById('gst-bill-totals-table');
+
+    if (billTotalTable && !isGSTMode) {
+        billTotalTable.parentNode.insertBefore(listContainer, billTotalTable.nextSibling);
+    } else if (gstBillTotalsTable && isGSTMode) {
+        gstBillTotalsTable.parentNode.insertBefore(listContainer, gstBillTotalsTable.nextSibling);
+    } else {
+        const listContainerParent = document.querySelector('.list-of-items');
+        if (listContainerParent) {
+            listContainerParent.appendChild(listContainer);
+        }
+    }
+}
+
+async function loadGSTCustomerDataFromLocalStorage() {
+    try {
+        const gstCustomerData = await getFromDB('gstMode', 'gstCustomerData');
+        if (gstCustomerData) {
+            // Update GST bill header
+            document.getElementById('bill-invoice-no').textContent = gstCustomerData.invoiceNo || '001';
+            document.getElementById('bill-date-gst').textContent = formatDateForDisplay(gstCustomerData.invoiceDate) || formatDateForDisplay(new Date());
+
+            // Update Bill To section
+            document.getElementById('billToName').textContent = gstCustomerData.billTo.name || '';
+            document.getElementById('billToAddr').textContent = gstCustomerData.billTo.address || '';
+            document.getElementById('billToGstin').textContent = gstCustomerData.billTo.gstin || 'customer 15-digit GSTIN';
+            document.getElementById('billToState').textContent = gstCustomerData.billTo.state || 'maharashtra';
+            document.getElementById('billToStateCode').textContent = gstCustomerData.billTo.stateCode || '27';
+
+            // Update Ship To section if applicable
+            const shipToDiv = document.getElementById('shipTo');
+            if (gstCustomerData.customerType === 'both' && gstCustomerData.shipTo.name) {
+                shipToDiv.style.display = 'block';
+                document.getElementById('shipToName').textContent = gstCustomerData.shipTo.name;
+                document.getElementById('shipToAddr').textContent = gstCustomerData.shipTo.address;
+                document.getElementById('shipToGstin').textContent = gstCustomerData.shipTo.gstin;
+                document.getElementById('shipToState').textContent = gstCustomerData.shipTo.state;
+                document.getElementById('shipToStateCode').textContent = gstCustomerData.shipTo.stateCode;
+                document.getElementById('shipToPOS').textContent = gstCustomerData.shipTo.placeOfSupply;
+            } else {
+                shipToDiv.style.display = 'none';
+            }
+
+            // Update transaction type and GST percent
+            transactionType = gstCustomerData.transactionType || 'intrastate';
+            currentGSTPercent = gstCustomerData.gstPercent || 18;
+
+            console.log('GST customer data loaded successfully');
+        }
+    } catch (error) {
+        console.error('Error loading GST customer data:', error);
+    }
+}
+async function loadFromLocalStorage() {
+    try {
+        const saved = await getFromDB('billDataManual', 'currentBill');
+        if (saved) {
+            // Load company details
+            document.getElementById("companyName").textContent = saved.company?.name || "COMPANY NAME";
+            document.getElementById("companyAddr").textContent = saved.company?.address || "Address";
+            document.getElementById("companyPhone").textContent = saved.company?.phone || "+91 01234-56789";
+            document.getElementById("companyGstin").textContent = saved.company?.gstin || "GSTIN : Your 15-digit GSTIN";
+
+            // Load customer details
+            document.getElementById("custName").value = saved.customer?.name || "";
+            document.getElementById("billNo").value = saved.customer?.billNo || "";
+            document.getElementById("custAddr").value = saved.customer?.address || "";
+            document.getElementById("billDate").value = saved.customer?.date || "";
+            document.getElementById("custPhone").value = saved.customer?.phone || "";
+            document.getElementById("custGSTIN").value = saved.customer?.gstin || "";
+
+            // Load tax settings
+            if (saved.taxSettings) {
+                discountPercent = saved.taxSettings.discountPercent || 0;
+                discountAmount = saved.taxSettings.discountAmount || 0;
+                gstPercent = saved.taxSettings.gstPercent || 0;
+            }
+
+            await loadCompanyInfo();
+            await loadGSTCustomerDataFromLocalStorage();
+
+            // NEW: Update bill view display with saved GST customer data
+            if (saved.gstCustomerData) {
+                document.getElementById('bill-invoice-no').textContent = saved.gstCustomerData.invoiceNo || '';
+                document.getElementById('bill-date-gst').textContent = saved.gstCustomerData.invoiceDate || '';
+
+                // Update Bill To section
+                document.getElementById('billToName').textContent = saved.gstCustomerData.billTo?.name || '';
+                document.getElementById('billToAddr').textContent = saved.gstCustomerData.billTo?.address || '';
+                document.getElementById('billToGstin').textContent = saved.gstCustomerData.billTo?.gstin || 'customer 15-digit GSTIN';
+                document.getElementById('billToContact').textContent = saved.gstCustomerData.billTo?.contact || 'Not provided';
+                document.getElementById('billToState').textContent = saved.gstCustomerData.billTo?.state || 'Maharashtra';
+                document.getElementById('billToStateCode').textContent = saved.gstCustomerData.billTo?.stateCode || '27';
+
+                // Update Ship To section
+                if (saved.gstCustomerData.customerType === 'both' && saved.gstCustomerData.shipTo?.name) {
+                    document.getElementById('shipTo').style.display = 'block';
+                    document.getElementById('shipToName').textContent = saved.gstCustomerData.shipTo.name;
+                    document.getElementById('shipToAddr').textContent = saved.gstCustomerData.shipTo.address;
+                    document.getElementById('shipToGstin').textContent = saved.gstCustomerData.shipTo.gstin;
+                    document.getElementById('shipToContact').textContent = saved.gstCustomerData.shipTo?.contact || 'Not provided';
+                    document.getElementById('shipToState').textContent = saved.gstCustomerData.shipTo.state;
+                    document.getElementById('shipToStateCode').textContent = saved.gstCustomerData.shipTo.stateCode;
+                    document.getElementById('shipToPOS').textContent = saved.gstCustomerData.shipTo.placeOfSupply;
+                } else {
+                    document.getElementById('shipTo').style.display = 'none';
+                }
+            }
+
+            // Clear all tables
+            const createListTbody = document.querySelector("#createListManual tbody");
+            const copyListTbody = document.querySelector("#copyListManual tbody");
+            const gstListTbody = document.querySelector("#gstCopyListManual tbody");
+
+            createListTbody.innerHTML = "";
+            copyListTbody.innerHTML = "";
+            if (gstListTbody) gstListTbody.innerHTML = "";
+
+            let maxId = 0;
+
+            // NEW: Load table structure in exact saved order using tableStructure
+            if (saved.tableStructure && saved.tableStructure.length > 0) {
+                saved.tableStructure.forEach(rowData => {
+                    if (rowData.type === 'section') {
+                        createSectionInAllTablesFromSaved(rowData);
+                    } else if (rowData.type === 'item') {
+                        // Create item in all tables
+                        createItemInAllTablesFromSaved(rowData);
+
+                        const idNum = parseInt(rowData.id.split('-')[2]);
+                        if (idNum > maxId) maxId = idNum;
+                    }
+                });
+                rowCounterManual = maxId + 1;
+
+                // ADD THIS: Restore dimension visibility state after all items are created
+                saved.tableStructure.forEach(rowData => {
+                    if (rowData.type === 'item' && rowData.dimensionsVisible !== undefined) {
+                        const row = document.querySelector(`#createListManual tr[data-id="${rowData.id}"]`);
+                        if (row) {
+                            row.setAttribute('data-dimensions-visible', rowData.dimensionsVisible ? 'true' : 'false');
+                            // Also update the toggle button icon
+                            const dimensionsBtn = row.querySelector('.dimensions-btn .material-icons');
+                            if (dimensionsBtn) {
+                                dimensionsBtn.textContent = rowData.dimensionsVisible ? 'layers' : 'layers_clear';
+                            }
+                        }
+                    }
+                });
+            }
+            // BACKWARD COMPATIBILITY: Handle old structure if tableStructure doesn't exist
+            else if (saved.items || saved.sections) {
+                // Load sections first (old way)
+                if (saved.sections && saved.sections.length > 0) {
+                    saved.sections.forEach(sectionData => {
+                        createSectionInAllTablesFromSaved(sectionData);
+                    });
+                }
+
+                // Then load items (old way)
+                if (saved.items && saved.items.length > 0) {
+                    saved.items.forEach(item => {
+                        // FIX: Safe handling for dimension toggles
+                        const toggleStates = item.dimensionToggles || { toggle1: true, toggle2: true, toggle3: true };
+
+                        createItemInAllTablesFromSaved({
+                            type: 'item',
+                            id: item.id,
+                            itemName: item.itemName,
+                            quantity: item.quantity,
+                            unit: item.unit,
+                            rate: item.rate,
+                            amount: item.amount,
+                            notes: item.notes,
+                            dimensionType: item.dimensionType,
+                            dimensionValues: item.dimensionValues,
+                            dimensionUnit: item.dimensionUnit,
+                            dimensionToggles: toggleStates,
+                            hsnCode: item.hsnCode,
+                            productCode: item.productCode,
+                            discountType: item.discountType,
+                            discountValue: item.discountValue,
+                            particularsHtml: item.particularsHtml,
+                            displayQuantity: item.displayQuantity
+                        });
+
+                        const idNum = parseInt(item.id.split('-')[2]);
+                        if (idNum > maxId) maxId = idNum;
+                    });
+                    rowCounterManual = maxId + 1;
+                }
+            }
+
+            // ADD THIS: Add drag listeners to all existing sections after loading
+            initializeDragAndDrop();
+            // Apply collapse states
+            if (saved.tableStructure) {
+                saved.tableStructure.forEach(rowData => {
+                    if (rowData.type === 'section' && rowData.collapsed) {
+                        const sectionRow = document.querySelector(`tr[data-section-id="${rowData.id}"]`);
+                        if (sectionRow) {
+                            const button = sectionRow.querySelector('.collapse-btn');
+                            if (button) {
+                                button.textContent = '+';
+                                let nextRow = sectionRow.nextElementSibling;
+                                while (nextRow && !nextRow.classList.contains('section-row')) {
+                                    nextRow.style.display = 'none';
+                                    nextRow = nextRow.nextElementSibling;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            // Backward compatibility for old structure
+            else if (saved.sections) {
+                saved.sections.forEach(sectionData => {
+                    if (sectionData.collapsed) {
+                        const sectionRow = document.querySelector(`tr[data-section-id="${sectionData.id}"]`);
+                        if (sectionRow) {
+                            const button = sectionRow.querySelector('.collapse-btn');
+                            if (button) {
+                                button.textContent = '+';
+                                let nextRow = sectionRow.nextElementSibling;
+                                while (nextRow && !nextRow.classList.contains('section-row')) {
+                                    nextRow.style.display = 'none';
+                                    nextRow = nextRow.nextElementSibling;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            if (saved.termsData && saved.termsData.length > 0) {
+                loadTermsData(saved.termsData);
+            }
+
+            updateSerialNumbers();
+            updateTotal();
+            updateGSTINVisibility();
+
+            if (isGSTMode) {
+                copyItemsToGSTBill();
+                updateGSTTaxCalculation();
+            }
+        }
+    } catch (error) {
+        console.error('Error loading from IndexedDB:', error);
+    }
+}
+function getTermsData() {
+    const termsDivs = document.querySelectorAll('.bill-footer-list[data-editable="true"]');
+    const termsData = [];
+
+    termsDivs.forEach(termsDiv => {
+        const heading = termsDiv.querySelector('h4')?.textContent || '';
+        const listElement = termsDiv.querySelector('ul, ol');
+        const listType = listElement?.tagName.toLowerCase() || 'ul';
+        const listStyle = listElement?.style.listStyleType || (listType === 'ul' ? 'disc' : 'decimal');
+
+        const listItems = Array.from(termsDiv.querySelectorAll('li')).map(li => li.textContent);
+
+        termsData.push({
+            heading: heading,
+            listType: listType,
+            listStyle: listStyle,
+            listItems: listItems
+        });
+    });
+
+    return termsData;
+}
+async function getGSTCustomerDataForSave() {
+    // Get current GST customer data from the BILL VIEW DISPLAY, not the form
+    const shipToVisible = document.getElementById('shipTo').style.display !== 'none';
+
+    return {
+        invoiceNo: document.getElementById('bill-invoice-no').textContent,
+        invoiceDate: document.getElementById('bill-date-gst').textContent,
+        billTo: {
+            name: document.getElementById('billToName').textContent,
+            address: document.getElementById('billToAddr').textContent,
+            gstin: document.getElementById('billToGstin').textContent,
+            contact: document.getElementById('billToContact').textContent,
+            state: document.getElementById('billToState').textContent,
+            stateCode: document.getElementById('billToStateCode').textContent
+        },
+        shipTo: {
+            name: document.getElementById('shipToName').textContent,
+            address: document.getElementById('shipToAddr').textContent,
+            gstin: document.getElementById('shipToGstin').textContent,
+            contact: document.getElementById('shipToContact').textContent,
+            state: document.getElementById('shipToState').textContent,
+            stateCode: document.getElementById('shipToStateCode').textContent,
+            placeOfSupply: document.getElementById('shipToPOS').textContent
+        },
+        customerType: shipToVisible ? 'both' : 'bill-to',
+        transactionType: transactionType,
+        gstPercent: currentGSTPercent
+    };
+}
+async function saveToLocalStorage() {
+    try {
+        const vars = getModeSpecificVars();
+        const createListId = vars.createListId;
+
+        const data = {
+            tableStructure: [], // CHANGED: Save complete table structure
+            company: {
+                name: document.getElementById("companyName").textContent,
+                address: document.getElementById("companyAddr").textContent,
+                phone: document.getElementById("companyPhone").textContent,
+                gstin: document.getElementById("companyGstin").textContent
+            },
+            customer: {
+                name: document.getElementById("custName").value,
+                billNo: document.getElementById("billNo").value,
+                address: document.getElementById("custAddr").value,
+                date: document.getElementById("billDate").value,
+                phone: document.getElementById("custPhone").value,
+                gstin: document.getElementById("custGSTIN").value
+            },
+            taxSettings: {
+                discountPercent: discountPercent,
+                discountAmount: discountAmount,
+                gstPercent: gstPercent
+            },
+            normalBillState: {
+                discountVisible: discountPercent > 0 && discountAmount > 0,
+                gstVisible: gstPercent > 0
+            },
+            //Save terms data
+            termsData: getTermsData(),
+            gstCustomerData: await getGSTCustomerDataForSave()
+        };
+
+        // CHANGED: Save complete table structure in exact order
+        document.querySelectorAll(`#${createListId} tbody tr`).forEach(row => {
+            // In saveToLocalStorage() function, update the section saving part:
+            // In saveToLocalStorage() function, modify the section saving part:
+            if (row.classList.contains('section-row')) {
+                // Save section data
+                const sectionId = row.getAttribute('data-section-id');
+                const cell = row.querySelector('td');
+                const collapseBtn = row.querySelector('.collapse-btn');
+
+                // Extract ONLY the section name (first text node) without any button text
+                let sectionName = '';
+                for (let node of cell.childNodes) {
+                    if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+                        sectionName = node.textContent.trim();
+                        break;
+                    }
+                }
+
+                // FIX: Only save HTML for input table, but create clean HTML without buttons
+                let htmlContent = '';
+                if (row.closest('#createListManual')) {
+                    // For input table, save the complete HTML with buttons
+                    htmlContent = cell.innerHTML;
+                } else {
+                    // For bill view tables, save only the section name
+                    htmlContent = sectionName;
+                }
+
+                data.tableStructure.push({
+                    type: 'section',
+                    id: sectionId,
+                    name: sectionName,
+                    style: cell.getAttribute('style') || '',
+                    collapsed: collapseBtn ? collapseBtn.textContent === '+' : false,
+                    html: htmlContent,
+                    // ADD THIS: Track which table this section came from
+                    sourceTable: row.closest('table')?.id || 'createListManual'
+                });
+            } else if (row.getAttribute('data-id')) {
+                // Save item data
+                const cells = row.children;
+                const particularsDiv = cells[1];
+                const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
+                const notes = particularsDiv.querySelector('.notes')?.textContent || '';
+
+                // FIXED: Safe JSON parsing for dimension data
+                const dimensionType = row.getAttribute('data-dimension-type') || 'none';
+                const dimensionValuesAttr = row.getAttribute('data-dimension-values');
+                const dimensionValues = dimensionValuesAttr ? JSON.parse(dimensionValuesAttr) : [0, 0, 0];
+                const dimensionUnit = row.getAttribute('data-dimension-unit') || 'ft';
+                const toggleStatesAttr = row.getAttribute('data-dimension-toggles');
+                const toggleStates = toggleStatesAttr ? JSON.parse(toggleStatesAttr) : { toggle1: true, toggle2: true, toggle3: true };
+
+                const originalQuantity = parseFloat(row.getAttribute('data-original-quantity') || cells[2].textContent);
+
+                const hsnCode = row.getAttribute('data-hsn') || '';
+                const productCode = row.getAttribute('data-product-code') || '';
+                const discountType = row.getAttribute('data-discount-type') || 'none';
+                const discountValue = row.getAttribute('data-discount-value') || '';
+
+                data.tableStructure.push({
+                    type: 'item',
+                    id: row.getAttribute('data-id'),
+                    itemName: itemName,
+                    quantity: originalQuantity.toFixed(8),
+                    unit: cells[3].textContent,
+                    rate: storeWithPrecision(parseFloat(cells[4].textContent)),
+                    amount: storeWithPrecision(parseFloat(cells[5].textContent)),
+                    notes: notes,
+                    dimensionType: dimensionType,
+                    dimensionValues: dimensionValues,
+                    dimensionUnit: dimensionUnit,
+                    dimensionToggles: toggleStates,
+                    hsnCode: hsnCode,
+                    productCode: productCode,
+                    discountType: discountType,
+                    discountValue: discountValue,
+                    particularsHtml: particularsDiv.innerHTML,
+                    displayQuantity: cells[2].textContent,
+                    // ADD THIS LINE:
+                    dimensionsVisible: row.getAttribute('data-dimensions-visible') === 'true'
+                });
+            }
+        });
+
+        await setInDB('billDataManual', 'currentBill', data);
+    } catch (error) {
+        console.error('Error saving to localStorage:', error);
+    }
+}
+
+function saveStateToHistory() {
+    const historyStack = historyStackManual;
+    let historyIndex = historyIndexManual;
+
+    if (historyIndex < historyStack.length - 1) {
+        historyStack.splice(historyIndex + 1);
+    }
+
+    const state = {
+        tableStructure: [], // NEW: Save complete table structure in exact order
+        company: {
+            name: document.getElementById("companyName").textContent,
+            address: document.getElementById("companyAddr").textContent,
+            phone: document.getElementById("companyPhone").textContent
+        },
+        customer: {
+            name: document.getElementById("custName").value,
+            billNo: document.getElementById("billNo").value,
+            address: document.getElementById("custAddr").value,
+            date: document.getElementById("billDate").value,
+            phone: document.getElementById("custPhone").value,
+            gstin: document.getElementById("custGSTIN").value
+        },
+        taxSettings: {
+            discountPercent: storeWithPrecision(discountPercent),
+            gstPercent: storeWithPrecision(gstPercent)
+        }
+    };
+
+    // NEW: Save complete table structure in exact order (same as saveToLocalStorage)
+    document.querySelectorAll(`#createListManual tbody tr`).forEach(row => {
+        // In saveStateToHistory() function, do the same fix:
+        if (row.classList.contains('section-row')) {
+            // Save section data
+            const sectionId = row.getAttribute('data-section-id');
+            const cell = row.querySelector('td');
+            const collapseBtn = row.querySelector('.collapse-btn');
+
+            // Extract ONLY the section name (first text node) without any button text
+            let sectionName = '';
+            for (let node of cell.childNodes) {
+                if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+                    sectionName = node.textContent.trim();
+                    break;
+                }
+            }
+
+            // FIX: Save the complete HTML with event.stopPropagation()
+            const completeHTML = cell.innerHTML;
+
+            state.tableStructure.push({
+                type: 'section',
+                id: sectionId,
+                name: sectionName,
+                style: cell.getAttribute('style') || '',
+                collapsed: collapseBtn ? collapseBtn.textContent === '+' : false,
+                // ADD THIS: Save complete HTML with proper event handlers
+                html: completeHTML
+            });
+        } else if (row.getAttribute('data-id')) {
+            // Save item data
+            const cells = row.children;
+            const particularsDiv = cells[1];
+            const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
+            const notes = particularsDiv.querySelector('.notes')?.textContent || '';
+
+            const particularsHtml = particularsDiv.innerHTML;
+
+            // FIXED: Safe JSON parsing for dimension data
+            const dimensionType = row.getAttribute('data-dimension-type') || 'none';
+            const dimensionValuesAttr = row.getAttribute('data-dimension-values');
+            const dimensionValues = dimensionValuesAttr ? JSON.parse(dimensionValuesAttr) : [0, 0, 0];
+            const dimensionUnit = row.getAttribute('data-dimension-unit') || 'ft';
+
+            // FIX: Safe JSON parsing for dimension toggles
+            const toggleStatesAttr = row.getAttribute('data-dimension-toggles');
+            let toggleStates;
+            try {
+                toggleStates = toggleStatesAttr && toggleStatesAttr !== 'undefined' ? JSON.parse(toggleStatesAttr) : { toggle1: true, toggle2: true, toggle3: true };
+            } catch (e) {
+                console.warn('Invalid toggle states in saveStateToHistory, using defaults:', e);
+                toggleStates = { toggle1: true, toggle2: true, toggle3: true };
+            }
+
+            const originalQuantity = parseFloat(row.getAttribute('data-original-quantity') || cells[2].textContent);
+
+            // FIX: Save dimensions visibility state
+            const dimensionsVisible = row.getAttribute('data-dimensions-visible') === 'true';
+
+            state.tableStructure.push({
+                type: 'item',
+                id: row.getAttribute('data-id'),
+                itemName: itemName,
+                quantity: originalQuantity.toFixed(8),
+                unit: cells[3].textContent,
+                rate: storeWithPrecision(parseFloat(cells[4].textContent)),
+                amount: storeWithPrecision(parseFloat(cells[5].textContent)),
+                notes: notes,
+                dimensionType: dimensionType,
+                dimensionValues: dimensionValues,
+                dimensionUnit: dimensionUnit,
+                dimensionToggles: toggleStates,
+                particularsHtml: particularsHtml,
+                displayQuantity: cells[2].textContent,
+                // ADD THIS LINE to preserve dimension visibility in undo/redo:
+                dimensionsVisible: row.getAttribute('data-dimensions-visible') === 'true'
+            });
+        }
+    });
+
+    historyStack.push(JSON.stringify(state));
+    historyIndex = historyStack.length - 1;
+    historyIndexManual = historyIndex;
+
+    if (historyStack.length > 50) {
+        historyStack.shift();
+        historyIndexManual--;
+    }
+}
+
+function undoAction() {
+    if (currentView === 'bill') {
+        showNotification('Switch to Input mode for Undo/Redo', 'info');
+        return;
+    }
+
+    if (historyIndexManual > 0) {
+        historyIndexManual--;
+        restoreStateFromHistory();
+    }
+}
+
+function redoAction() {
+    if (currentView === 'bill') {
+        showNotification('Switch to Input mode for Undo/Redo', 'info');
+        return;
+    }
+
+    if (historyIndexManual < historyStackManual.length - 1) {
+        historyIndexManual++;
+        restoreStateFromHistory();
+    }
+}
+function restoreStateFromHistory() {
+    const state = JSON.parse(historyStackManual[historyIndexManual]);
+
+    document.getElementById("companyName").textContent = state.company?.name || "COMPANY NAME";
+    document.getElementById("companyAddr").textContent = state.company?.address || "Address";
+    document.getElementById("companyPhone").textContent = state.company?.phone || "+91 01234-56789";
+    document.getElementById("companyGstin").textContent = state.company?.gstin || "GSTIN : Your 15-digit GSTIN";
+
+    document.getElementById("custName").value = state.customer?.name || "";
+    document.getElementById("billNo").value = state.customer?.billNo || "";
+    document.getElementById("custAddr").value = state.customer?.address || "";
+    document.getElementById("billDate").value = state.customer?.date || "";
+    document.getElementById("custPhone").value = state.customer?.phone || "";
+    document.getElementById("custGSTIN").value = state.customer?.gstin || "";
+
+    if (state.taxSettings) {
+        discountPercent = state.taxSettings.discountPercent || 0;
+        gstPercent = state.taxSettings.gstPercent || 0;
+    }
+
+    const createListTbody = document.querySelector("#createListManual tbody");
+    const copyListTbody = document.querySelector("#copyListManual tbody");
+    createListTbody.innerHTML = "";
+    copyListTbody.innerHTML = "";
+
+    let maxId = 0;
+
+    // NEW: Restore table structure in exact saved order
+    if (state.tableStructure && state.tableStructure.length > 0) {
+        state.tableStructure.forEach(rowData => {
+            if (rowData.type === 'section') {
+                createSectionInAllTablesFromSaved(rowData);
+            } else if (rowData.type === 'item') {
+                // FIX: Safe handling for dimension toggles
+                const toggleStates = rowData.dimensionToggles || { toggle1: true, toggle2: true, toggle3: true };
+
+                // Create item in all tables
+                createItemInAllTablesFromSaved({
+                    type: 'item',
+                    id: rowData.id,
+                    itemName: rowData.itemName,
+                    quantity: rowData.quantity,
+                    unit: rowData.unit,
+                    rate: rowData.rate,
+                    amount: rowData.amount,
+                    notes: rowData.notes,
+                    dimensionType: rowData.dimensionType,
+                    dimensionValues: rowData.dimensionValues,
+                    dimensionUnit: rowData.dimensionUnit,
+                    dimensionToggles: toggleStates,
+                    hsnCode: rowData.hsnCode,
+                    productCode: rowData.productCode,
+                    discountType: rowData.discountType,
+                    discountValue: rowData.discountValue,
+                    particularsHtml: rowData.particularsHtml,
+                    displayQuantity: rowData.displayQuantity,
+                    // ADD THIS LINE:
+                    dimensionsVisible: rowData.dimensionsVisible !== false // Use saved state
+                });
+
+                const idNum = parseInt(rowData.id.split('-')[2]);
+                if (idNum > maxId) maxId = idNum;
+            }
+        });
+        rowCounterManual = maxId + 1;
+    }
+
+    // APPLY DIMENSION VISIBILITY RESTORATION AFTER ALL ITEMS ARE CREATED
+    if (state.tableStructure && state.tableStructure.length > 0) {
+        state.tableStructure.forEach(rowData => {
+            if (rowData.type === 'item' && rowData.dimensionsVisible !== undefined) {
+                const row = document.querySelector(`#createListManual tr[data-id="${rowData.id}"]`);
+                if (row) {
+                    row.setAttribute('data-dimensions-visible', rowData.dimensionsVisible ? 'true' : 'false');
+                    const dimensionsDiv = row.querySelector('.dimensions');
+                    if (dimensionsDiv) {
+                        dimensionsDiv.style.display = rowData.dimensionsVisible ? 'block' : 'none';
+                    }
+                    // Update toggle button icon
+                    const dimensionsBtn = row.querySelector('.dimensions-btn .material-icons');
+                    if (dimensionsBtn) {
+                        dimensionsBtn.textContent = rowData.dimensionsVisible ? 'layers' : 'layers_clear';
+                    }
+                }
+            }
+        });
+    }
+
+    // Apply collapse states to sections
+    if (state.tableStructure) {
+        state.tableStructure.forEach(rowData => {
+            if (rowData.type === 'section' && rowData.collapsed) {
+                const sectionRow = document.querySelector(`tr[data-section-id="${rowData.id}"]`);
+                if (sectionRow) {
+                    const button = sectionRow.querySelector('.collapse-btn');
+                    if (button) {
+                        button.textContent = '+';
+                        let nextRow = sectionRow.nextElementSibling;
+                        while (nextRow && !nextRow.classList.contains('section-row')) {
+                            nextRow.style.display = 'none';
+                            nextRow = nextRow.nextElementSibling;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    updateSerialNumbers();
+    updateTotal();
+    updateGSTINVisibility();
+    saveToLocalStorage();
+
+    // Initialize drag and drop for all rows
+    initializeDragAndDrop();
+
+    // FIX: Apply final quantity formatting to ensure consistency
+    formatAllQuantitiesAfterRestore();
+    // Update column visibility after restoring state
+    updateColumnVisibility();
+}
+
+// Replace the formatAllQuantities function with this one
+function formatAllQuantitiesAfterRestore() {
+    const tables = ['createListManual', 'copyListManual'];
+    if (isGSTMode) {
+        tables.push('gstCopyListManual');
+    }
+
+    tables.forEach(tableId => {
+        const rows = document.querySelectorAll(`#${tableId} tbody tr[data-id]`);
+
+        rows.forEach(row => {
+            const quantityCell = row.children[2]; // Qty is at index 2 for regular tables
+            let originalQuantity;
+
+            // For GST table, quantity is at index 3
+            if (tableId === 'gstCopyListManual') {
+                originalQuantity = parseFloat(row.children[3].textContent);
+            } else {
+                originalQuantity = parseFloat(row.getAttribute('data-original-quantity') || quantityCell.textContent);
+            }
+
+            // Format quantity - remove .00 if whole number
+            const formattedQuantity = originalQuantity % 1 === 0 ?
+                originalQuantity.toString() :
+                originalQuantity.toFixed(2);
+
+            // Update the cell
+            if (tableId === 'gstCopyListManual') {
+                row.children[3].textContent = formattedQuantity;
+            } else {
+                quantityCell.textContent = formattedQuantity;
+            }
+        });
+    });
+}
+async function saveToHistory() {
+    try {
+        const vars = getModeSpecificVars();
+        const historyStorageKey = vars.historyStorageKey;
+
+        const customerName = document.getElementById("custName").value.trim() || "Unnamed Bill";
+        const billNo = document.getElementById("billNo").value.trim() || "No Bill Number";
+        const date = document.getElementById("billDate").value.trim() || new Date().toLocaleDateString();
+
+        const currentData = {
+            tableStructure: [], // NEW: Use same structure as undo/redo
+            company: {
+                name: document.getElementById("companyName").textContent,
+                address: document.getElementById("companyAddr").textContent,
+                phone: document.getElementById("companyPhone").textContent
+            },
+            customer: {
+                name: customerName,
+                billNo: billNo,
+                address: document.getElementById("custAddr").value,
+                date: date,
+                phone: document.getElementById("custPhone").value,
+                gstin: document.getElementById("custGSTIN").value
+            },
+            taxSettings: {
+                // In saveToLocalStorage() and saveStateToHistory():
+                taxSettings: {
+                    // discountPercent: 0, // Always save as 0, let modal handle it
+                    // discountAmount: 0,  // Always save as 0, let modal handle it
+                    gstPercent: storeWithPrecision(gstPercent)
+                }
+            },
+            timestamp: Date.now(),
+            totalAmount: "0.00"
+        };
+
+        const createListId = vars.createListId;
+        let totalAmount = 0;
+
+        // NEW: Save complete table structure in exact order
+        document.querySelectorAll(`#${createListId} tbody tr`).forEach(row => {
+            if (row.classList.contains('section-row')) {
+                // Save section data
+                const sectionId = row.getAttribute('data-section-id');
+                const cell = row.querySelector('td');
+                const collapseBtn = row.querySelector('.collapse-btn');
+
+                // Extract ONLY the section name (first text node) without any button text
+                let sectionName = '';
+                for (let node of cell.childNodes) {
+                    if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+                        sectionName = node.textContent.trim();
+                        break;
+                    }
+                }
+
+                currentData.tableStructure.push({
+                    type: 'section',
+                    id: sectionId,
+                    name: sectionName,
+                    style: cell.getAttribute('style') || '',
+                    collapsed: collapseBtn ? collapseBtn.textContent === '+' : false
+                });
+            } else if (row.getAttribute('data-id')) {
+                // Save item data
+                const cells = row.children;
+                const particularsDiv = cells[1];
+                const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
+                const notes = particularsDiv.querySelector('.notes')?.textContent || '';
+                const amount = parseFloat(cells[5].textContent) || 0;
+                totalAmount += amount;
+
+                const particularsHtml = particularsDiv.innerHTML;
+                const dimensionType = row.getAttribute('data-dimension-type') || 'none';
+                const dimensionValues = JSON.parse(row.getAttribute('data-dimension-values') || '[0,0,0]');
+                const dimensionUnit = row.getAttribute('data-dimension-unit') || 'ft';
+                const originalQuantity = parseFloat(row.getAttribute('data-original-quantity') || cells[2].textContent);
+
+                currentData.tableStructure.push({
+                    type: 'item',
+                    id: row.getAttribute('data-id'),
+                    itemName: itemName,
+                    quantity: originalQuantity.toFixed(8),
+                    unit: cells[3].textContent,
+                    rate: cells[4].textContent,
+                    amount: cells[5].textContent,
+                    notes: notes,
+                    dimensionType: dimensionType,
+                    dimensionValues: dimensionValues,
+                    dimensionUnit: dimensionUnit,
+                    particularsHtml: particularsHtml,
+                    displayQuantity: cells[2].textContent,
+                    dimensionsVisible: row.getAttribute('data-dimensions-visible') === 'true'
+                });
+            }
+        });
+
+        currentData.totalAmount = totalAmount.toFixed(2);
+
+        if (totalAmount === 0 && currentData.tableStructure.length === 0) {
+            return;
+        }
+
+        let history = await getFromDB(historyStorageKey, 'history') || [];
+
+        if (history.length > 0) {
+            const lastItem = history[0];
+            if (JSON.stringify(lastItem.data.tableStructure) === JSON.stringify(currentData.tableStructure) &&
+                lastItem.data.customer.name === currentData.customer.name &&
+                lastItem.data.customer.billNo === currentData.customer.billNo) {
+                return;
+            }
+        }
+
+        const historyData = {
+            id: `bill-${Date.now()}`,
+            title: `${customerName} - ${billNo}`,
+            date: date,
+            data: currentData
+        };
+
+        history.unshift(historyData);
+
+        if (history.length > 50) {
+            history = history.slice(0, 50);
+        }
+
+        await setInDB(historyStorageKey, 'history', history);
+
+        const historySidebar = document.getElementById("history-sidebar");
+        if (historySidebar && historySidebar.classList.contains("open")) {
+            loadHistoryFromLocalStorage();
+        }
+    } catch (error) {
+        console.error('Error saving to history:', error);
+    }
+}
+
+async function loadHistoryFromLocalStorage() {
+    try {
+        const vars = getModeSpecificVars();
+        const historyStorageKey = vars.historyStorageKey;
+
+        const history = await getFromDB(historyStorageKey, 'history') || [];
+        const historyList = document.getElementById("history-list");
+
+        historyList.innerHTML = "";
+
+        if (history.length === 0) {
+            historyList.innerHTML = '<div class="history-item">No history available</div>';
+            return;
+        }
+
+        history.forEach(item => {
+            const historyItem = document.createElement("div");
+            historyItem.className = "history-item";
+            historyItem.innerHTML = `
+                <div class="history-item-title">${item.title}</div>
+                <div class="history-item-date">${item.date}</div>
+                <div class="history-item-total">Total: ₹${item.data.totalAmount || '0.00'}</div>
+                <button class="history-item-remove" onclick="removeHistoryItem('${item.id}', event)">×</button>
+            `;
+
+            historyItem.addEventListener('click', function (e) {
+                if (!e.target.classList.contains('history-item-remove')) {
+                    loadFromHistory(item);
+                }
+            });
+
+            historyList.appendChild(historyItem);
+        });
+    } catch (error) {
+        console.error('Error loading history:', error);
+        document.getElementById("history-list").innerHTML = '<div class="history-item">Error loading history</div>';
+    }
+}
+
+async function removeHistoryItem(id, event) {
+    if (event) event.stopPropagation();
+
+    try {
+        const vars = getModeSpecificVars();
+        const historyStorageKey = vars.historyStorageKey;
+
+        let history = await getFromDB(historyStorageKey, 'history') || [];
+        history = history.filter(item => item.id !== id);
+        await setInDB(historyStorageKey, 'history', history);
+
+        await loadHistoryFromLocalStorage();
+    } catch (error) {
+        console.error('Error removing history item:', error);
+    }
+}
+
+async function loadFromHistory(item) {
+    if (!item.data) return;
+
+    const data = item.data;
+
+    // Only load data if there's actual content
+    if (data.tableStructure && data.tableStructure.length > 0) {
+        document.getElementById("companyName").textContent = data.company.name;
+        document.getElementById("companyAddr").textContent = data.company.address;
+        document.getElementById("companyPhone").textContent = data.company.phone;
+        document.getElementById("custName").value = data.customer.name;
+        document.getElementById("billNo").value = data.customer.billNo;
+        document.getElementById("custAddr").value = data.customer.address;
+        document.getElementById("billDate").value = data.customer.date;
+        document.getElementById("custPhone").value = data.customer.phone;
+        document.getElementById("custGSTIN").value = data.customer.gstin || '';
+
+        if (data.taxSettings) {
+            discountPercent = data.taxSettings.discountPercent || 0;
+            gstPercent = data.taxSettings.gstPercent || 0;
+        }
+
+        const createListTbody = document.querySelector("#createListManual tbody");
+        const copyListTbody = document.querySelector("#copyListManual tbody");
+        createListTbody.innerHTML = "";
+        copyListTbody.innerHTML = "";
+
+        let maxId = 0;
+
+        // Restore table structure in exact saved order
+        if (data.tableStructure && data.tableStructure.length > 0) {
+            data.tableStructure.forEach(rowData => {
+                if (rowData.type === 'section') {
+                    createSectionInAllTablesFromSaved(rowData);
+                } else if (rowData.type === 'item') {
+                    // Create item in all tables
+                    createItemInAllTablesFromSaved({
+                        type: 'item',
+                        id: rowData.id,
+                        itemName: rowData.itemName,
+                        quantity: rowData.quantity,
+                        unit: rowData.unit,
+                        rate: rowData.rate,
+                        amount: rowData.amount,
+                        notes: rowData.notes,
+                        dimensionType: rowData.dimensionType,
+                        dimensionValues: rowData.dimensionValues,
+                        dimensionUnit: rowData.dimensionUnit,
+                        hsnCode: rowData.hsnCode,
+                        productCode: rowData.productCode,
+                        discountType: rowData.discountType,
+                        discountValue: rowData.discountValue,
+                        particularsHtml: rowData.particularsHtml,
+                        displayQuantity: rowData.displayQuantity
+                    });
+
+                    const idNum = parseInt(rowData.id.split('-')[2]);
+                    if (idNum > maxId) maxId = idNum;
+
+                    // Restore dimension visibility state
+                    const row = document.querySelector(`#createListManual tr[data-id="${rowData.id}"]`);
+                    if (row && rowData.dimensionsVisible !== undefined) {
+                        row.setAttribute('data-dimensions-visible', rowData.dimensionsVisible ? 'true' : 'false');
+                        const dimensionsDiv = row.querySelector('.dimensions');
+                        if (dimensionsDiv) {
+                            dimensionsDiv.style.display = rowData.dimensionsVisible ? 'block' : 'none';
+                        }
+                        // Update toggle button icon
+                        const dimensionsBtn = row.querySelector('.dimensions-btn .material-icons');
+                        if (dimensionsBtn) {
+                            dimensionsBtn.textContent = rowData.dimensionsVisible ? 'layers' : 'layers_clear';
+                        }
+                    }
+                }
+            });
+            rowCounterManual = maxId + 1;
+        }
+
+        // Apply collapse states to sections
+        if (data.tableStructure) {
+            data.tableStructure.forEach(rowData => {
+                if (rowData.type === 'section' && rowData.collapsed) {
+                    const sectionRow = document.querySelector(`tr[data-section-id="${rowData.id}"]`);
+                    if (sectionRow) {
+                        const button = sectionRow.querySelector('.collapse-btn');
+                        if (button) {
+                            button.textContent = '+';
+                            let nextRow = sectionRow.nextElementSibling;
+                            while (nextRow && !nextRow.classList.contains('section-row')) {
+                                nextRow.style.display = 'none';
+                                nextRow = nextRow.nextElementSibling;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        updateSerialNumbers();
+        updateTotal();
+        await saveToLocalStorage();
+        saveStateToHistory();
+
+        // Initialize drag and drop for all rows
+        initializeDragAndDrop();
+
+        closeHistoryModal();
+
+        console.log('Bill restored successfully from history');
+    } else {
+        // Handle empty or invalid history item
+        console.log('No data found in this history item');
+        showNotification('No data found in this history item');
+    }
+    // Update column visibility after loading from history
+    updateColumnVisibility();
+}
+
+function openDiscountModal() {
+    const modal = document.getElementById('discount-modal');
+    const percentInput = document.getElementById('discount-percent-input');
+    const amountInput = document.getElementById('discount-amount-input');
+    const typeSelect = document.getElementById('discount-type-select');
+    const subtotalDisplay = document.getElementById('current-subtotal-display');
+
+    // Get current subtotal
+    const currentSubtotal = getCurrentSubtotal();
+    subtotalDisplay.textContent = roundToTwoDecimals(currentSubtotal);
+
+    console.log('Opening modal - Current values:', { discountPercent, discountAmount });
+
+    // DETERMINISTIC SELECTION - don't auto-detect
+    if (discountPercent > 0) {
+        typeSelect.value = 'percent';
+        percentInput.value = roundToTwoDecimals(discountPercent);
+        amountInput.value = '';
+    } else if (discountAmount > 0) {
+        typeSelect.value = 'amount';
+        amountInput.value = roundToTwoDecimals(discountAmount);
+        percentInput.value = '';
+    } else {
+        typeSelect.value = 'none';
+        percentInput.value = '';
+        amountInput.value = '';
+    }
+
+    // Show/hide relevant inputs
+    handleDiscountTypeChange();
+
+    modal.style.display = 'block';
+}
+
+function closeDiscountModal() {
+    const modal = document.getElementById('discount-modal');
+    modal.style.display = 'none';
+}
+
+// Precision helper functions
+function roundToTwoDecimals(value) {
+    if (isNaN(value)) return 0;
+
+    // First round to handle floating-point precision issues
+    const rounded = Math.round(value * 100) / 100;
+
+    // If it's very close to a whole number after rounding, return the whole number
+    if (Math.abs(rounded - Math.round(rounded)) < 0.001) {
+        return Math.round(rounded);
+    }
+
+    return parseFloat(rounded.toFixed(2));
+}
+
+function storeWithPrecision(value) {
+    if (isNaN(value)) return 0;
+    return parseFloat(value.toFixed(8));
+}
+
+function calculateWithPrecision(value) {
+    if (isNaN(value)) return 0;
+    return parseFloat(value.toFixed(8));
+}
+
+async function applyDiscountSettings() {
+    const type = document.getElementById('discount-type-select').value;
+    const currentSubtotal = getCurrentSubtotal();
+
+    console.log('Applying discount - Type:', type, 'Current values:', { discountPercent, discountAmount });
+
+    // COMPLETELY RESET based on selection
+    if (type === 'none') {
+        discountPercent = 0;
+        discountAmount = 0;
+        console.log('Reset both to 0');
+    }
+    else if (type === 'percent') {
+        const percentValue = parseFloat(document.getElementById('discount-percent-input').value) || 0;
+
+        // ADDED: Prevent discount over 100%
+        if (percentValue > 100) {
+            showNotification('Discount percentage cannot exceed 100%', 'info');
+            return;
+        }
+
+        discountPercent = storeWithPrecision(percentValue);
+        discountAmount = storeWithPrecision((discountPercent / 100) * currentSubtotal);
+        console.log('Set percent:', discountPercent, 'Amount:', discountAmount);
+    }
+    else if (type === 'amount') {
+        const amountValue = parseFloat(document.getElementById('discount-amount-input').value) || 0;
+
+        // ADDED: Prevent discount amount exceeding subtotal
+        if (amountValue > currentSubtotal) {
+            showNotification('Discount amount cannot exceed subtotal of ₹' + currentSubtotal.toFixed(2), 'info');
+            return;
+        }
+
+        discountAmount = storeWithPrecision(amountValue);
+        // CALCULATE PERCENT FOR DISPLAY ONLY (not for calculation)
+        discountPercent = storeWithPrecision((discountAmount / currentSubtotal) * 100);
+        console.log('Set amount:', discountAmount, 'Calculated display percent:', discountPercent);
+    }
+
+    console.log('Final values:', { discountPercent, discountAmount });
+
+    // Save and update
+    await saveTaxSettings();
+
+    if (isGSTMode) {
+        updateGSTTaxCalculation();
+    } else {
+        updateTotal();
+    }
+
+    await saveToLocalStorage();
+    saveStateToHistory();
+    closeDiscountModal();
+}
+
+function openGSTModal() {
+
+    const modal = document.getElementById('gst-modal');
+    const gstInput = document.getElementById('gst-input');
+    const gstinInput = document.getElementById('gstin-input');
+
+    gstInput.value = gstPercent;
+    gstinInput.value = document.getElementById('custGSTIN').value || '';
+
+    modal.style.display = 'block';
+}
+
+function closeGSTModal() {
+    const modal = document.getElementById('gst-modal');
+    modal.style.display = 'none';
+}
+
+// Add this NEW function to update GSTIN field visibility
+function updateGSTINVisibility() {
+    const customerGSTIN = document.getElementById('custGSTIN');
+    const companyGSTIN = document.getElementById('companyGstin');
+
+    if (gstPercent > 0) {
+        customerGSTIN.style.display = 'inline-block';
+        companyGSTIN.style.display = 'block';
+    } else {
+        customerGSTIN.style.display = 'none';
+        companyGSTIN.style.display = 'none';
+    }
+}
+
+async function applyGSTSettings() {
+    const gstInput = document.getElementById('gst-input');
+    const gstinInput = document.getElementById('gstin-input');
+
+    const newGST = parseFloat(gstInput.value) || 0;
+    const newGSTIN = gstinInput.value.trim();
+
+    if (newGST < 0 || newGST > 100) {
+        return;
+    }
+
+    gstPercent = newGST;
+
+    document.getElementById('custGSTIN').value = newGSTIN;
+
+    await saveTaxSettings();
+    updateTotal();
+    updateGSTINVisibility(); // Add this line to update visibility
+    await saveToLocalStorage();
+    saveStateToHistory();
+    closeGSTModal();
+}
+
+async function saveGSTIN() {
+    await saveToLocalStorage();
+    saveStateToHistory();
+}
+
+async function saveTaxSettings() {
+    const taxSettings = {
+        discountPercent: storeWithPrecision(discountPercent),
+        discountAmount: storeWithPrecision(discountAmount),
+        gstPercent: storeWithPrecision(gstPercent)
+    };
+    await setInDB('taxSettings', 'taxSettings', taxSettings);
+}
+
+async function loadTaxSettings() {
+    try {
+        const saved = await getFromDB('taxSettings', 'taxSettings');
+        if (saved) {
+            discountPercent = saved.discountPercent || 0;
+            gstPercent = saved.gstPercent || 0;
+        }
+    } catch (error) {
+        console.error('Error loading tax settings:', error);
+    }
+}
+
+async function backupData() {
+    try {
+        const currentBill = await getFromDB('billDataManual', 'currentBill');
+        const historyData = await getAllFromDB('billHistoryManual');
+        const taxSettings = await getFromDB('taxSettings', 'taxSettings');
+        const theme = await getFromDB('theme', 'currentTheme');
+        const savedItems = await getAllFromDB('savedItems');
+        const savedCustomers = await getAllFromDB('savedCustomers');
+        const savedBills = await getAllFromDB('savedBills');
+
+        // GST Data
+        const gstCustomers = await getAllFromDB('gstCustomers');
+        const gstSavedBills = await getAllFromDB('gstSavedBills');
+        const companyInfo = await getFromDB('companyInfo', 'companyInfo');
+        const gstMode = await getFromDB('gstMode', 'isGSTMode');
+
+        const backupData = {
+            currentBill: currentBill,
+            history: historyData,
+            taxSettings: taxSettings,
+            theme: theme,
+            savedItems: savedItems,
+            savedCustomers: savedCustomers,
+            savedBills: savedBills,
+            // GST Data
+            gstCustomers: gstCustomers,
+            gstSavedBills: gstSavedBills,
+            companyInfo: companyInfo,
+            gstMode: gstMode,
+            timestamp: new Date().toISOString(),
+            version: '2.0'
+        };
+
+        const dataStr = JSON.stringify(backupData);
+        const dataBlob = new Blob([dataStr], { type: 'application/json' });
+
+        const url = URL.createObjectURL(dataBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `bill-app-backup-${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+
+    } catch (error) {
+        console.error('Error creating backup:', error);
+    }
+}
+
+async function restoreData() {
+    try {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+
+        input.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = async (event) => {
+                try {
+                    const backupData = JSON.parse(event.target.result);
+
+                    if (!backupData.currentBill || !backupData.history) {
+                        showNotification('Invalid backup file format');
+                        return;
+                    }
+
+                    // Clear all existing data before restoring
+                    await clearAllData(true);
+
+                    // Restore regular data
+                    await setInDB('billDataManual', 'currentBill', backupData.currentBill);
+
+                    for (const historyItem of backupData.history) {
+                        await setInDB('billHistoryManual', historyItem.id, historyItem.value);
+                    }
+
+                    if (backupData.taxSettings) {
+                        await setInDB('taxSettings', 'taxSettings', backupData.taxSettings);
+                    }
+
+                    if (backupData.theme) {
+                        await setInDB('theme', 'currentTheme', backupData.theme);
+                    }
+
+                    if (backupData.savedItems) {
+                        for (const item of backupData.savedItems) {
+                            await setInDB('savedItems', item.id, item.value);
+                        }
+                    }
+
+                    if (backupData.savedCustomers) {
+                        for (const customer of backupData.savedCustomers) {
+                            await setInDB('savedCustomers', customer.id, customer.value);
+                        }
+                    }
+
+                    if (backupData.savedBills) {
+                        for (const bill of backupData.savedBills) {
+                            await setInDB('savedBills', bill.id, bill.value);
+                        }
+                    }
+
+                    // Restore GST Data
+                    if (backupData.gstCustomers) {
+                        for (const customer of backupData.gstCustomers) {
+                            await setInDB('gstCustomers', customer.id, customer.value);
+                        }
+                    }
+
+                    if (backupData.gstSavedBills) {
+                        for (const bill of backupData.gstSavedBills) {
+                            await setInDB('gstSavedBills', bill.id, bill.value);
+                        }
+                    }
+
+                    if (backupData.companyInfo) {
+                        await setInDB('companyInfo', 'companyInfo', backupData.companyInfo);
+                    }
+
+                    if (backupData.gstMode !== undefined) {
+                        await setInDB('gstMode', 'isGSTMode', backupData.gstMode);
+                    }
+
+
+                    // Reload all data
+                    await loadFromLocalStorage();
+                    await loadHistoryFromLocalStorage();
+                    await loadSavedTheme();
+                    await loadTaxSettings();
+                    // await loadSavedItems();
+                    await loadSavedCustomers();
+
+                    // Load GST data
+                    await loadCompanyInfo();
+                    await loadGSTCustomers();
+
+                    // Update GST mode
+                    const gstModeSetting = await getFromDB('gstMode', 'isGSTMode');
+                    isGSTMode = gstModeSetting || false;
+                    updateUIForGSTMode();
+
+                    saveStateToHistory();
+
+                    showNotification('Data restored successfully!');
+
+                } catch (error) {
+                    console.error('Error parsing backup file:', error);
+                    showNotification('Error restoring backup file. Please make sure it\'s a valid backup file.');
+                }
+            };
+            reader.readAsText(file);
+        };
+
+        input.click();
+    } catch (error) {
+        console.error('Error restoring data:', error);
+        showNotification('Error restoring data. Please try again.');
+    }
+}
+function clearCustomerInputs() {
+    // Clear Bill To inputs
+    document.getElementById('consignee-name').value = '';
+    document.getElementById('consignee-address').value = '';
+    document.getElementById('consignee-gst').value = '';
+    document.getElementById('consignee-state').value = 'Maharashtra';
+    document.getElementById('consignee-code').value = '27';
+    document.getElementById('consignee-contact').value = '';
+
+    // Clear Ship To inputs
+    document.getElementById('buyer-name').value = '';
+    document.getElementById('buyer-address').value = '';
+    document.getElementById('buyer-gst').value = '';
+    document.getElementById('buyer-state').value = 'Maharashtra';
+    document.getElementById('buyer-code').value = '27';
+    document.getElementById('buyer-contact').value = '';
+    document.getElementById('place-of-supply').value = 'Maharashtra';
+
+    // Clear invoice details
+    document.getElementById('invoice-no').value = '';
+    document.getElementById('gst-percent-input').value = '18';
+
+    // Also clear the bill view display
+    document.getElementById('bill-invoice-no').textContent = '';
+    document.getElementById('bill-date-gst').textContent = '';
+    document.getElementById('billToName').textContent = '';
+    document.getElementById('billToAddr').textContent = '';
+    document.getElementById('billToGstin').textContent = 'customer 15-digit GSTIN';
+    document.getElementById('billToContact').textContent = 'Not provided';
+    document.getElementById('shipTo').style.display = 'none';
+
+    // Save the cleared state
+    saveCustomerDialogState();
+    saveToLocalStorage();
+
+    showNotification('Customer details cleared successfully!', 'success');
+}
+
+async function clearAllData(silent = false) {
+    // Save current state to history BEFORE clearing (only if there's actual data)
+    const hasItems = document.querySelectorAll('#createListManual tbody tr[data-id]').length > 0;
+    const hasSections = document.querySelectorAll('#createListManual tbody tr.section-row').length > 0;
+
+    if (hasItems || hasSections) {
+        // Only save to history if there's actual content to preserve
+        saveStateToHistory();
+        await saveToHistory();
+    }
+
+    // Clear current workspace data
+    document.getElementById("custName").value = "";
+
+    // ADD THIS: Auto-increment bill number based on saved bills
+    try {
+        const savedBills = await getAllFromDB('savedBills');
+        let maxBillNo = 0;
+
+        savedBills.forEach(bill => {
+            if (bill.value.customer?.billNo) {
+                const billNo = parseInt(bill.value.customer.billNo);
+                if (!isNaN(billNo) && billNo > maxBillNo) {
+                    maxBillNo = billNo;
+                }
+            }
+        });
+
+        if (maxBillNo > 0) {
+            document.getElementById("billNo").value = (maxBillNo + 1).toString();
+        } else {
+            document.getElementById("billNo").value = "";
+        }
+    } catch (error) {
+        console.error('Error getting saved bills for bill number:', error);
+        document.getElementById("billNo").value = "";
+    }
+
+    document.getElementById("custAddr").value = "";
+    document.getElementById("custPhone").value = "";
+    document.getElementById("custGSTIN").value = "";
+
+    initializeDateInputs();
+
+    const createListTbody = document.querySelector("#createListManual tbody");
+    const copyListTbody = document.querySelector("#copyListManual tbody");
+    createListTbody.innerHTML = "";
+    copyListTbody.innerHTML = "";
+
+    // NEW: Clear customer dialog state completely
+    try {
+        await removeFromDB('gstMode', 'customerDialogState');
+        // Also reset the customer type to default
+        document.getElementById('customer-type').value = 'bill-to';
+        handleCustomerTypeChange();
+
+        // CLEAR ALL CUSTOMER DIALOG FORM FIELDS
+        document.getElementById('consignee-name').value = '';
+        document.getElementById('consignee-address').value = '';
+        document.getElementById('consignee-gst').value = '';
+        document.getElementById('consignee-state').value = 'Maharashtra';
+        document.getElementById('consignee-code').value = '27';
+        document.getElementById('consignee-contact').value = '';
+
+        document.getElementById('buyer-name').value = '';
+        document.getElementById('buyer-address').value = '';
+        document.getElementById('buyer-gst').value = '';
+        document.getElementById('buyer-state').value = 'Maharashtra';
+        document.getElementById('buyer-code').value = '27';
+        document.getElementById('buyer-contact').value = '';
+        document.getElementById('place-of-supply').value = 'Maharashtra';
+
+        // ADD THIS: Set today's date in customer dialog modal
+        const today = new Date();
+        const day = String(today.getDate()).padStart(2, '0');
+        const month = String(today.getMonth() + 1).padStart(2, '0');
+        const year = today.getFullYear();
+        document.getElementById('invoice-date').value = `${day}-${month}-${year}`;
+
+    } catch (error) {
+        console.error('Error clearing customer dialog state:', error);
+    }
+
+
+    // NEW: Clear GST customer details and reset to default HTML
+    if (isGSTMode) {
+        // Generate fresh invoice number (highest + 1) and update both modal and bill view
+        await generateNextInvoiceNumber();
+        document.getElementById('bill-invoice-no').textContent = document.getElementById('invoice-no').value;
+
+        // Set today's date in "05 NOV 2025" format
+        const today = new Date();
+        const day = String(today.getDate()).padStart(2, '0');
+        // const month = today.toLocaleString('en', { month: 'short' }).toUpperCase();
+        const month = String(today.getMonth() + 1).padStart(2, '0');
+        console.log(month, "this is pain");
+        const year = today.getFullYear();
+        document.getElementById('bill-date-gst').textContent = `${day}-${month}-${year}`;
+
+        // Reset Bill To to default placeholders
+        document.getElementById('billToName').textContent = ' ';
+        document.getElementById('billToAddr').textContent = ' ';
+        document.getElementById('billToGstin').textContent = 'customer 15-digit GSTIN';
+        document.getElementById('billToState').textContent = 'Maharashtra';
+        document.getElementById('billToStateCode').textContent = '27';
+        document.getElementById('billToContact').textContent = 'Not provided';
+
+        // Hide and reset Ship To to default placeholders
+        document.getElementById('shipTo').style.display = 'none';
+        document.getElementById('shipToName').textContent = '';
+        document.getElementById('shipToAddr').textContent = '';
+        document.getElementById('shipToGstin').textContent = 'customer 15-digit GSTIN';
+        document.getElementById('shipToContact').textContent = 'Not provided';
+        document.getElementById('shipToState').textContent = 'Maharashtra';
+        document.getElementById('shipToStateCode').textContent = '27';
+        document.getElementById('shipToPOS').textContent = '';
+    }
+
+    // Clear GST table if exists
+    const gstListTbody = document.querySelector("#gstCopyListManual tbody");
+    if (gstListTbody) {
+        gstListTbody.innerHTML = "";
+    }
+    if (isGSTMode) {
+        updateGSTTaxCalculation();
+    }
+
+    rowCounterManual = 1;
+    currentlyEditingRowIdManual = null;
+
+    discountPercent = 0;
+    gstPercent = 0;
+
+    currentDimensions = {
+        type: 'none',
+        unit: 'ft',
+        values: [0, 0, 0],
+        calculatedArea: 0
+    };
+
+    updateSerialNumbers();
+    updateTotal();
+    // Reset edit mode when clearing all data
+    resetEditMode();
+    await saveCustomerDialogState();
+    // Save the empty state to localStorage but NOT to history
+    await saveToLocalStorage();
+
+    // ADD THIS: Force save the cleared customer details state
+    await saveGSTCustomerDataToLocalStorage();
+
+    if (!silent) {
+        // Show confirmation message
+        console.log('All data cleared. Previous bills are preserved in history.');
+    }
+}
+
+function changeTheme(theme) {
+    const root = document.documentElement;
+
+    switch (theme) {
+        case 'blue':
+            root.style.setProperty('--primary-color', '#3498db');
+            root.style.setProperty('--secondary-color', '#2980b9');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#f9f9f9');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#f1c40f');
+            root.style.setProperty('--total-bg', '#ecf0f1');
+            break;
+        case 'green':
+            root.style.setProperty('--primary-color', '#2ecc71');
+            root.style.setProperty('--secondary-color', '#27ae60');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#f9f9f9');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#f1c40f');
+            root.style.setProperty('--total-bg', '#eafaf1');
+            break;
+        case 'red':
+            root.style.setProperty('--primary-color', '#e74c3c');
+            root.style.setProperty('--secondary-color', '#c0392b');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#f9f9f9');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#f1c40f');
+            root.style.setProperty('--total-bg', '#fdedec');
+            break;
+        case 'purple':
+            root.style.setProperty('--primary-color', '#9b59b6');
+            root.style.setProperty('--secondary-color', '#8e44ad');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#f9f9f9');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#f1c40f');
+            root.style.setProperty('--total-bg', '#f5eef8');
+            break;
+        case 'orange':
+            root.style.setProperty('--primary-color', '#f26d38');
+            root.style.setProperty('--secondary-color', '#e67e22');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#f9f9f9');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#f1c40f');
+            root.style.setProperty('--total-bg', '#fef5e7');
+            break;
+        case 'dark':
+            root.style.setProperty('--primary-color', '#34495e');
+            root.style.setProperty('--secondary-color', '#2c3e50');
+            root.style.setProperty('--text-color', '#000');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#34495e');
+            root.style.setProperty('--highlight-color', '#f1c40f');
+            root.style.setProperty('--total-bg', '#e1e1e1');
+            break;
+    }
+    setInDB('theme', 'theme', theme);
+}
+
+async function cycleTheme() {
+    currentThemeIndex = (currentThemeIndex + 1) % themes.length;
+    changeTheme(themes[currentThemeIndex]);
+}
+
+async function loadSavedTheme() {
+    try {
+        const savedTheme = await getFromDB('theme', 'theme');
+        if (savedTheme !== null && themes.includes(savedTheme)) {
+            currentThemeIndex = themes.indexOf(savedTheme);
+            changeTheme(savedTheme);
+        } else {
+            changeTheme(themes[0]);
+        }
+    } catch (error) {
+        console.error('Error loading theme:', error);
+        changeTheme(themes[0]);
+    }
+}
+// Dynamic Add Customer Handler
+function handleAddCustomer() {
+    if (currentCustomerMode === 'gst') {
+        openAddGSTCustomerModal();
+    } else {
+        openAddCustomerModal();
+    }
+}
+
+function toggleCustomerMode() {
+    const toggle = document.getElementById('customer-mode-toggle');
+    const addButton = document.getElementById('add-customer-main-btn');
+
+    if (toggle.checked) {
+        currentCustomerMode = 'gst';
+        addButton.textContent = 'Add New GST Customer';
+        // LOAD GST CUSTOMERS LIST
+        loadGSTCustomersList();
+    } else {
+        currentCustomerMode = 'regular';
+        addButton.textContent = 'Add New Customer';
+        // LOAD REGULAR CUSTOMERS LIST
+        loadCustomersList();
+    }
+}
+// Toggle between Regular and GST Bills
+function toggleBillsMode() {
+    const toggle = document.getElementById('bills-mode-toggle');
+
+    if (toggle.checked) {
+        currentBillsMode = 'gst';
+        // LOAD GST BILLS LIST
+        loadGSTSavedBillsList();
+    } else {
+        currentBillsMode = 'regular';
+        // LOAD REGULAR BILLS LIST
+        loadSavedBillsList();
+    }
+}
+
+// NEW FUNCTION: Update column visibility based on current view
+function updateColumnVisibility() {
+    if (currentView === 'bill') {
+        if (isGSTMode) {
+            // Hide remove button columns in GST bill view
+            hideTableColumn(document.getElementById("gstCopyListManual"), 8, "none");
+            hideTableColumn(document.getElementById("gstCopyListManual"), 7, "none");
+        } else {
+            // Hide remove button columns in regular bill view
+            hideTableColumn(document.getElementById("copyListManual"), 7, "none");
+            hideTableColumn(document.getElementById("copyListManual"), 6, "none");
+        }
+    } else {
+        // Show columns in input view
+        if (isGSTMode) {
+            hideTableColumn(document.getElementById("gstCopyListManual"), 8, "table-cell");
+            hideTableColumn(document.getElementById("gstCopyListManual"), 7, "table-cell");
+        } else {
+            hideTableColumn(document.getElementById("copyListManual"), 7, "table-cell");
+            hideTableColumn(document.getElementById("copyListManual"), 6, "table-cell");
+        }
+    }
+}
+
+function toggleView() {
+    const bill = document.getElementById("bill-container");
+    const gstBill = document.getElementById("gst-bill-container");
+    const manual = document.getElementById("manual-item-container");
+    const viewText = document.getElementById('view-text');
+    const viewIcon = document.getElementById('view-icon');
+
+    currentView = currentView === 'input' ? 'bill' : 'input';
+
+    if (currentView === 'bill') {
+        manual.style.display = "none";
+        viewText.textContent = "SHOW INPUT";
+        viewIcon.textContent = "edit";
+
+        if (isGSTMode) {
+            // Show GST bill layout
+            bill.style.display = "none";
+            gstBill.style.display = "block";
+
+            // Update GST bill with current data
+            updateGSTBillDisplay();
+
+            // Hide columns for GST bill
+            hideTableColumn(document.getElementById("gstCopyListManual"), 8, "none");
+            hideTableColumn(document.getElementById("gstCopyListManual"), 7, "none");
+        } else {
+            // Show regular bill layout
+            bill.style.display = "block";
+            gstBill.style.display = "none";
+
+            // Hide columns for regular bill
+            hideTableColumn(document.getElementById("copyListManual"), 7, "none");
+            hideTableColumn(document.getElementById("copyListManual"), 6, "none");
+
+            // FIX: Refresh discount row after switching to bill view
+            updateTotal();
+        }
+    } else {
+        // Show input mode
+        bill.style.display = "none";
+        gstBill.style.display = "none";
+        manual.style.display = "block";
+        viewText.textContent = "SHOW BILL";
+        viewIcon.textContent = "description";
+
+        // Show columns again
+        if (isGSTMode) {
+            hideTableColumn(document.getElementById("gstCopyListManual"), 8, "table-cell");
+            hideTableColumn(document.getElementById("gstCopyListManual"), 7, "table-cell");
+        } else {
+            hideTableColumn(document.getElementById("copyListManual"), 7, "table-cell");
+            hideTableColumn(document.getElementById("copyListManual"), 6, "table-cell");
+        }
+    }
+
+    updateColumnVisibility();
+}
+
+// SIMPLE DRAG & DROP - Unified for all rows
+let dragSrcEl = null;
+let isDragging = false;
+
+function handleDragStart(e) {
+    dragSrcEl = this;
+    isDragging = true;
+    this.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+
+    // Simple drag image
+    const dragImage = this.cloneNode(true);
+    dragImage.style.opacity = '0.7';
+    dragImage.style.width = this.offsetWidth + 'px';
+    document.body.appendChild(dragImage);
+    e.dataTransfer.setDragImage(dragImage, 0, 0);
+    setTimeout(() => document.body.removeChild(dragImage), 0);
+}
+
+function handleDragOver(e) {
+    e.preventDefault();
+    if (!dragSrcEl || !isDragging) return;
+
+    const tbody = this.closest('tbody');
+    const afterElement = getDragAfterElement(tbody, e.clientY);
+
+    // Remove highlight from all rows
+    const allRows = tbody.querySelectorAll('tr');
+    allRows.forEach(row => row.classList.remove('drag-over'));
+
+    // Highlight the drop target
+    if (afterElement && afterElement !== dragSrcEl) {
+        afterElement.classList.add('drag-over');
+    }
+
+    return false;
+}
+
+function handleDragEnter(e) {
+    e.preventDefault();
+}
+
+function handleDragLeave(e) {
+    if (!this.contains(e.relatedTarget)) {
+        this.classList.remove('drag-over');
+    }
+}
+
+function handleDrop(e) {
+    e.preventDefault();
+    if (e.stopPropagation) e.stopPropagation();
+
+    if (!dragSrcEl || !isDragging) return;
+
+    const sourceTbody = dragSrcEl.closest('tbody');
+    const afterElement = getDragAfterElement(sourceTbody, e.clientY);
+
+    if (dragSrcEl !== this && afterElement !== dragSrcEl) {
+        if (afterElement) {
+            sourceTbody.insertBefore(dragSrcEl, afterElement);
+        } else {
+            sourceTbody.appendChild(dragSrcEl);
+        }
+
+        // Sync across all tables
+        syncAllTables();
+
+        updateSerialNumbers();
+        updateTotal();
+        saveToLocalStorage();
+        saveStateToHistory();
+
+        if (isGSTMode) {
+            updateGSTTaxCalculation();
+        }
+    }
+
+    cleanupDrag();
+    return false;
+}
+
+function handleDragEnd(e) {
+    cleanupDrag();
+}
+
+function getDragAfterElement(container, y) {
+    const draggableElements = [...container.querySelectorAll('tr:not(.dragging)')];
+
+    for (const element of draggableElements) {
+        const box = element.getBoundingClientRect();
+        const middle = box.top + box.height / 2;
+
+        if (y < middle) {
+            return element;
+        }
+    }
+
+    return null;
+}
+
+function syncAllTables() {
+    const sourceTable = document.getElementById('createListManual');
+    if (!sourceTable) return;
+
+    const sourceTbody = sourceTable.querySelector('tbody');
+    const sourceRows = Array.from(sourceTbody.querySelectorAll('tr'));
+
+    // Apply same order to other tables
+    const tablesToSync = ['copyListManual', 'gstCopyListManual'];
+    tablesToSync.forEach(tableId => {
+        const table = document.getElementById(tableId);
+        if (!table) return;
+
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return;
+
+        // Get all rows from this table
+        const currentRows = Array.from(tbody.querySelectorAll('tr'));
+
+        // Create a map for quick lookup
+        const rowMap = new Map();
+        currentRows.forEach(row => {
+            const id = row.getAttribute('data-id') || row.getAttribute('data-section-id');
+            if (id) rowMap.set(id, row);
+        });
+
+        // Clear the table
+        tbody.innerHTML = '';
+
+        // Add rows in the same order as source table
+        sourceRows.forEach(sourceRow => {
+            const id = sourceRow.getAttribute('data-id') || sourceRow.getAttribute('data-section-id');
+            const rowToAdd = rowMap.get(id);
+            if (rowToAdd) {
+                tbody.appendChild(rowToAdd);
+            }
+        });
+    });
+}
+
+function addDragAndDropListeners(row) {
+    row.setAttribute('draggable', 'true');
+    row.addEventListener('dragstart', handleDragStart);
+    row.addEventListener('dragenter', handleDragEnter);
+    row.addEventListener('dragover', handleDragOver);
+    row.addEventListener('dragleave', handleDragLeave);
+    row.addEventListener('drop', handleDrop);
+    row.addEventListener('dragend', handleDragEnd);
+}
+
+function cleanupDrag() {
+    if (dragSrcEl) {
+        dragSrcEl.classList.remove('dragging');
+    }
+
+    // Remove all highlights
+    const allTables = ['createListManual', 'copyListManual', 'gstCopyListManual'];
+    allTables.forEach(tableId => {
+        const table = document.getElementById(tableId);
+        if (table) {
+            const tbody = table.querySelector('tbody');
+            if (tbody) {
+                const allRows = tbody.querySelectorAll('tr');
+                allRows.forEach(row => row.classList.remove('drag-over', 'dragging'));
+            }
+        }
+    });
+
+    dragSrcEl = null;
+    isDragging = false;
+}
+
+function initializeDragAndDrop() {
+    const tables = ['createListManual', 'copyListManual', 'gstCopyListManual'];
+    tables.forEach(tableId => {
+        const table = document.getElementById(tableId);
+        if (table && table.querySelector('tbody')) {
+            const rows = table.querySelector('tbody').querySelectorAll('tr');
+            rows.forEach(row => {
+                addDragAndDropListeners(row);
+            });
+        }
+    });
+}
+
+// Enhanced PDF download with better page breaks
+function downloadPDF() {
+    saveToLocalStorage();
+
+    let billContainer, containerToDownload;
+    const originalDisplay = {};
+
+    if (isGSTMode) {
+        // GST Mode: Use GST bill container
+        billContainer = document.getElementById("gst-bill-container");
+        containerToDownload = billContainer;
+
+        // Store original display state
+        originalDisplay.gstBill = billContainer.style.display;
+        originalDisplay.regularBill = document.getElementById("bill-container").style.display;
+        originalDisplay.manual = document.getElementById("manual-item-container").style.display;
+
+        // Show GST bill and hide others
+        billContainer.style.display = "block";
+        document.getElementById("bill-container").style.display = "none";
+        document.getElementById("manual-item-container").style.display = "none";
+
+        // Hide columns for GST bill
+        hideTableColumn(document.getElementById("gstCopyListManual"), 8, "none");
+        hideTableColumn(document.getElementById("gstCopyListManual"), 7, "none");
+    } else {
+        // Regular Mode: Use regular bill container
+        billContainer = document.getElementById("bill-container");
+        containerToDownload = billContainer;
+
+        // Store original display state
+        originalDisplay.regularBill = billContainer.style.display;
+        originalDisplay.gstBill = document.getElementById("gst-bill-container").style.display;
+        originalDisplay.manual = document.getElementById("manual-item-container").style.display;
+
+        // Show regular bill and hide others
+        billContainer.style.display = "block";
+        document.getElementById("gst-bill-container").style.display = "none";
+        document.getElementById("manual-item-container").style.display = "none";
+
+        // Hide columns for regular bill
+        hideTableColumn(document.getElementById("copyListManual"), 7, "none");
+        hideTableColumn(document.getElementById("copyListManual"), 6, "none");
+    }
+
+    const options = {
+        margin: [10, 10, 10, 10], // top, right, bottom, left
+        filename: `bill-${document.getElementById("billNo").value || 'document'}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: {
+            scale: 2,
+            useCORS: true,
+            logging: false,
+            scrollX: 0,
+            scrollY: 0
+        },
+        jsPDF: {
+            unit: 'mm',
+            format: 'a4',
+            orientation: 'portrait'
+        },
+        // Improved page break handling - let content break naturally
+        pagebreak: {
+            mode: ['css', 'avoid-all'],
+            before: '.force-page-break' // Only force break for specific elements
+        }
+    };
+
+    html2pdf().from(containerToDownload).set(options).save().then(() => {
+        // Restore original display states
+        if (isGSTMode) {
+            document.getElementById("gst-bill-container").style.display = originalDisplay.gstBill;
+            document.getElementById("bill-container").style.display = originalDisplay.regularBill;
+            document.getElementById("manual-item-container").style.display = originalDisplay.manual;
+
+            // Show columns again for GST bill
+            if (currentView === 'input') {
+                hideTableColumn(document.getElementById("gstCopyListManual"), 8, "table-cell");
+                hideTableColumn(document.getElementById("gstCopyListManual"), 7, "table-cell");
+            }
+        } else {
+            document.getElementById("bill-container").style.display = originalDisplay.regularBill;
+            document.getElementById("gst-bill-container").style.display = originalDisplay.gstBill;
+            document.getElementById("manual-item-container").style.display = originalDisplay.manual;
+
+            // Show columns again for regular bill
+            if (currentView === 'input') {
+                hideTableColumn(document.getElementById("copyListManual"), 7, "table-cell");
+            }
+            hideTableColumn(document.getElementById("copyListManual"), 6, "table-cell");
+        }
+    });
+}
+
+// Print functionality (keep this as is)
+function handlePrint() {
+    // Save current view state
+    const previousView = currentView;
+
+    // Switch to bill view based on current mode
+    if (currentView !== 'bill') {
+        toggleView(); // This will switch to bill view
+    }
+
+    // Wait for UI to update, then trigger print
+    setTimeout(() => {
+        window.print();
+
+        // Optional: Return to previous view after print dialog closes
+        setTimeout(() => {
+            if (previousView !== 'bill') {
+                toggleView(); // Return to previous view
+            }
+        }, 1000);
+    }, 500);
+}
+function hideTableColumn(table, colIndex, displayStyle) {
+    if (!table) return;
+    const rows = table.getElementsByTagName('tr');
+    for (let i = 0; i < rows.length; i++) {
+        const cols = rows[i].cells;
+        if (cols.length > colIndex) {
+            cols[colIndex].style.display = displayStyle;
+        }
+    }
+}
+
+function toggleRateColumn() {
+    if (currentView === 'bill') {
+        showNotification('Switch to Input mode to toggle rate column', 'info');
+        return;
+    }
+
+    const tables = [
+        document.getElementById("createListManual"),
+        document.getElementById("copyListManual")
+    ];
+
+    rateColumnHidden = !rateColumnHidden;
+    const displayStyle = rateColumnHidden ? "none" : "table-cell";
+
+    tables.forEach(table => {
+        if (table) {
+            hideTableColumn(table, 4, displayStyle);
+        }
+    });
+
+    // Also update GST table if in GST mode (shouldn't happen, but just in case)
+    if (isGSTMode) {
+        const gstTable = document.getElementById("gstCopyListManual");
+        if (gstTable) {
+            hideTableColumn(gstTable, 5, "table-cell"); // Always show in GST mode
+        }
+    }
+
+    const buttonIcon = document.querySelector('#tools button:nth-child(6) .material-icons');
+    if (buttonIcon) {
+        buttonIcon.textContent = rateColumnHidden ? "visibility" : "visibility_off";
+    }
+}
+
+function autoSave() {
+    saveToLocalStorage();
+    saveToHistory();
+    saveStateToHistory();
+}
+
+window.onclick = function (event) {
+    const discountModal = document.getElementById('discount-modal');
+    const gstModal = document.getElementById('gst-modal');
+    const manageItemsModal = document.getElementById('manage-items-modal');
+    const addItemModal = document.getElementById('add-item-modal');
+    const manageCustomersModal = document.getElementById('manage-customers-modal');
+    const addCustomerModal = document.getElementById('add-customer-modal');
+    const savedBillsModal = document.getElementById('saved-bills-modal');
+    const historyModal = document.getElementById('history-modal');
+    const clearHistoryModal = document.getElementById('clear-history-modal');
+    const batchInvoiceModal = document.getElementById('batch-invoice-modal');
+
+    // ADD THIS LINE: Get section modal
+    const sectionModal = document.getElementById('section-modal');
+
+    if (event.target == discountModal) {
+        closeDiscountModal();
+    }
+    if (event.target == batchInvoiceModal) {
+        closeBatchInvoiceModal();
+    }
+    if (event.target == gstModal) {
+        closeGSTModal();
+    }
+    if (event.target == manageItemsModal) {
+        closeManageItemsModal();
+    }
+    if (event.target == addItemModal) {
+        // closeAddItemModal();
+    }
+    if (event.target == manageCustomersModal) {
+        closeManageCustomersModal();
+    }
+    if (event.target == addCustomerModal) {
+        closeAddCustomerModal();
+    }
+    if (event.target == savedBillsModal) {
+        closeSavedBillsModal();
+    }
+    if (event.target == historyModal) {
+        closeHistoryModal();
+    }
+    if (event.target == clearHistoryModal) {
+        closeClearHistoryModal();
+    }
+
+    // ADD THIS: Handle section modal click
+    if (event.target == sectionModal) {
+        closeSectionModal();
+    }
+}
+
+// History Modal Functions
+function openHistoryModal() {
+    document.getElementById('history-modal').style.display = 'block';
+    loadHistoryFromLocalStorage();
+    toggleSettingsSidebar(); // Close settings sidebar if open
+}
+
+function closeHistoryModal() {
+    document.getElementById('history-modal').style.display = 'none';
+}
+
+function openClearHistoryConfirmation() {
+    document.getElementById('clear-history-modal').style.display = 'block';
+}
+
+function closeClearHistoryModal() {
+    document.getElementById('clear-history-modal').style.display = 'none';
+}
+
+async function clearAllHistory() {
+    try {
+        const vars = getModeSpecificVars();
+        const historyStorageKey = vars.historyStorageKey;
+
+        await setInDB(historyStorageKey, 'history', []);
+        await loadHistoryFromLocalStorage();
+        closeClearHistoryModal();
+        closeHistoryModal();
+    } catch (error) {
+        console.error('Error clearing history:', error);
+    }
+}
+
+function searchHistory() {
+    const searchTerm = document.getElementById('history-search').value.toLowerCase();
+    const historyItems = document.querySelectorAll('.history-item');
+
+    historyItems.forEach(item => {
+        const title = item.querySelector('.history-item-title').textContent.toLowerCase();
+        const date = item.querySelector('.history-item-date').textContent.toLowerCase();
+
+        if (title.includes(searchTerm) || date.includes(searchTerm)) {
+            item.style.display = 'block';
+        } else {
+            item.style.display = 'none';
+        }
+    });
+}
+
+// Update the loadHistoryFromLocalStorage function to work with modal
+async function loadHistoryFromLocalStorage() {
+    try {
+        const vars = getModeSpecificVars();
+        const historyStorageKey = vars.historyStorageKey;
+
+        const history = await getFromDB(historyStorageKey, 'history') || [];
+        const historyList = document.getElementById("history-list");
+
+        historyList.innerHTML = "";
+
+        if (history.length === 0) {
+            historyList.innerHTML = '<div class="history-item">No history available</div>';
+            return;
+        }
+
+        history.forEach(item => {
+            const historyItem = document.createElement("div");
+            historyItem.className = "history-item";
+            historyItem.innerHTML = `
+                <div class="history-item-title">${item.title}</div>
+                <div class="history-item-date">${item.date}</div>
+                <div class="history-item-total">Total: ₹${item.data.totalAmount || '0.00'}</div>
+                <button class="history-item-remove" onclick="removeHistoryItem('${item.id}', event)">×</button>
+            `;
+
+            historyItem.addEventListener('click', function (e) {
+                if (!e.target.classList.contains('history-item-remove')) {
+                    loadFromHistory(item);
+                    closeHistoryModal();
+                }
+            });
+
+            historyList.appendChild(historyItem);
+        });
+    } catch (error) {
+        console.error('Error loading history:', error);
+        document.getElementById("history-list").innerHTML = '<div class="history-item">Error loading history</div>';
+    }
+}
+
+// Update the removeHistoryItem function
+async function removeHistoryItem(id, event) {
+    if (event) event.stopPropagation();
+
+    try {
+        const vars = getModeSpecificVars();
+        const historyStorageKey = vars.historyStorageKey;
+
+        let history = await getFromDB(historyStorageKey, 'history') || [];
+        history = history.filter(item => item.id !== id);
+        await setInDB(historyStorageKey, 'history', history);
+
+        await loadHistoryFromLocalStorage();
+    } catch (error) {
+        console.error('Error removing history item:', error);
+    }
+}
+
+function openGSTModeModal() {
+    toggleSettingsSidebar();
+    const modal = document.getElementById('gst-mode-modal');
+    const enableGSTCheckbox = document.getElementById('enable-gst-mode');
+
+    // Set checkbox to current GST mode state
+    enableGSTCheckbox.checked = isGSTMode;
+
+    // Update modal text based on current state
+    const modalTitle = modal.querySelector('h3');
+    const modalText = modal.querySelector('.modal-body p');
+
+    if (isGSTMode) {
+        modalTitle.textContent = 'Switch to Regular Mode';
+        modalText.textContent = 'Switch to regular mode for simple billing without GST calculations?';
+    } else {
+        modalTitle.textContent = 'Switch to GST Mode';
+        modalText.textContent = 'Switch to GST mode for GST-compliant invoicing with tax calculations?';
+    }
+
+    modal.style.display = 'block';
+}
+
+function closeGSTModeModal() {
+    document.getElementById('gst-mode-modal').style.display = 'none';
+}
+
+async function toggleGSTMode() {
+    const enableGST = document.getElementById('enable-gst-mode').checked;
+
+    if (enableGST !== isGSTMode) {
+        isGSTMode = enableGST;
+        await setInDB('gstMode', 'isGSTMode', isGSTMode);
+        updateUIForGSTMode();
+        closeGSTModeModal();
+
+        // Show appropriate message
+        if (isGSTMode) {
+            console.log('GST Mode Enabled. Please set up your company information and customer details.');
+        } else {
+            console.log('Switched to Regular Mode.');
+        }
+    }
+}
+
+function openTaxAdjustmentModal() {
+    if (!isGSTMode) return;
+
+    const modal = document.getElementById('tax-adjustment-modal');
+    const customerGST = document.getElementById('current-customer-gst');
+    const itemCount = document.getElementById('current-item-count');
+
+    // Get current customer GST from customer details
+    const currentCustomerGST = currentGSTPercent || 18;
+    customerGST.textContent = currentCustomerGST;
+
+    // Count current items
+    const items = document.querySelectorAll('#createListManual tbody tr[data-id]');
+    itemCount.textContent = items.length;
+
+    // Set current adjust tax value
+    document.getElementById('adjust-tax-percent').value = currentAdjustTaxPercent;
+
+    modal.style.display = 'block';
+}
+
+function closeTaxAdjustmentModal() {
+    document.getElementById('tax-adjustment-modal').style.display = 'none';
+}
+
+function applyTaxAdjustment() {
+    if (!isGSTMode) return;
+
+    const adjustTaxInput = document.getElementById('adjust-tax-percent');
+    const adjustTaxPercent = parseFloat(adjustTaxInput.value) || 0;
+
+    if (adjustTaxPercent < 0 || adjustTaxPercent > 100) {
+        showNotification('Please enter a valid tax percentage between 0 and 100');
+        return;
+    }
+
+    const customerGSTPercent = currentGSTPercent || 18;
+
+    if (customerGSTPercent === 0) {
+        showNotification('Customer GST percentage is 0%. Please set customer GST first.');
+        return;
+    }
+
+    // Apply tax adjustment to all items
+    applyTaxAdjustmentToItems(adjustTaxPercent, customerGSTPercent);
+
+    currentAdjustTaxPercent = adjustTaxPercent;
+    closeTaxAdjustmentModal();
+}
+
+function applyTaxAdjustmentToItems(adjustTaxPercent, customerGSTPercent) {
+    const items = document.querySelectorAll('#createListManual tbody tr[data-id]');
+
+    if (items.length === 0) {
+        showNotification('No items found to adjust');
+        return;
+    }
+
+    // Handle 0% adjustment - reset to original rates (no adjustment)
+    if (adjustTaxPercent === 0) {
+        // Reset all rates to their original values in ALL tables
+        const allTables = ['createListManual', 'copyListManual', 'gstCopyListManual'];
+
+        allTables.forEach(tableId => {
+            const tableItems = document.querySelectorAll(`#${tableId} tbody tr[data-id]`);
+            tableItems.forEach(row => {
+                const cells = row.children;
+                if (cells.length < 6) return;
+
+                const rateCell = cells[4];
+                const amountCell = cells[5];
+
+                // Get the original rate from data attribute or recalculate
+                const originalRate = parseFloat(row.getAttribute('data-original-rate')) || parseFloat(rateCell.textContent);
+                const quantity = parseFloat(row.getAttribute('data-original-quantity') || cells[2].textContent);
+
+                if (!isNaN(originalRate) && originalRate > 0) {
+                    // Reset to original rate
+                    rateCell.textContent = originalRate.toFixed(2);
+
+                    // Recalculate amount based on dimension type
+                    const dimensionType = row.getAttribute('data-dimension-type') || 'none';
+                    let finalQuantity = quantity;
+
+                    if (dimensionType !== 'none' && dimensionType !== 'dozen') {
+                        const dimensionValues = JSON.parse(row.getAttribute('data-dimension-values') || '[0,0,0]');
+                        const calculatedArea = calculateAreaFromDimensions(dimensionType, dimensionValues);
+                        finalQuantity = quantity * calculatedArea;
+                    } else if (dimensionType === 'dozen') {
+                        finalQuantity = quantity / 12;
+                    }
+
+                    const newAmount = finalQuantity * originalRate;
+                    amountCell.textContent = newAmount.toFixed(2);
+
+                    // Update data attributes
+                    row.setAttribute('data-rate', originalRate.toFixed(8));
+                    row.setAttribute('data-amount', newAmount.toFixed(8));
+                }
+            });
+        });
+    } else {
+        // Calculate adjustment factor for non-zero adjustment
+        const adjustmentFactor = (1 + adjustTaxPercent / 100) / (1 + customerGSTPercent / 100);
+
+        // Apply adjustment to ALL tables
+        const allTables = ['createListManual', 'copyListManual', 'gstCopyListManual'];
+
+        allTables.forEach(tableId => {
+            const tableItems = document.querySelectorAll(`#${tableId} tbody tr[data-id]`);
+            tableItems.forEach(row => {
+                const cells = row.children;
+                if (cells.length < 6) return;
+
+                const rateCell = cells[4];
+                const amountCell = cells[5];
+
+                // Get current rate and quantity
+                const currentRate = parseFloat(rateCell.textContent);
+                const quantity = parseFloat(row.getAttribute('data-original-quantity') || cells[2].textContent);
+
+                if (!isNaN(currentRate) && currentRate > 0) {
+                    // Store original rate before adjustment (for reset functionality)
+                    if (!row.getAttribute('data-original-rate')) {
+                        row.setAttribute('data-original-rate', currentRate.toFixed(8));
+                    }
+
+                    // Calculate adjusted rate
+                    const adjustedRate = currentRate * adjustmentFactor;
+
+                    // Update rate
+                    rateCell.textContent = adjustedRate.toFixed(2);
+
+                    // Recalculate amount based on dimension type
+                    const dimensionType = row.getAttribute('data-dimension-type') || 'none';
+                    let finalQuantity = quantity;
+
+                    if (dimensionType !== 'none' && dimensionType !== 'dozen') {
+                        const dimensionValues = JSON.parse(row.getAttribute('data-dimension-values') || '[0,0,0]');
+                        const calculatedArea = calculateAreaFromDimensions(dimensionType, dimensionValues);
+                        finalQuantity = quantity * calculatedArea;
+                    } else if (dimensionType === 'dozen') {
+                        finalQuantity = quantity / 12;
+                    }
+
+                    const newAmount = finalQuantity * adjustedRate;
+                    amountCell.textContent = newAmount.toFixed(2);
+
+                    // Update data attributes
+                    row.setAttribute('data-rate', adjustedRate.toFixed(8));
+                    row.setAttribute('data-amount', newAmount.toFixed(8));
+                }
+            });
+        });
+    }
+
+    // Update serial numbers and totals
+    updateSerialNumbers();
+
+    // Update calculations without triggering UI errors
+    if (isGSTMode) {
+        const gstBillContainer = document.getElementById('gst-bill-container');
+        if (gstBillContainer && gstBillContainer.style.display !== 'none') {
+            updateGSTTaxCalculation();
+        }
+    } else {
+        const billContainer = document.getElementById('bill-container');
+        if (billContainer && billContainer.style.display !== 'none') {
+            updateTotal();
+        }
+    }
+
+    // Always update the input table total (it's always visible)
+    const totalAmountId = getModeSpecificVars().totalAmountId;
+    const total = Array.from(document.querySelectorAll('#createListManual tbody tr[data-id]'))
+        .reduce((sum, row) => {
+            const amountCell = row.querySelector('.amount');
+            if (amountCell) {
+                const amountValue = parseFloat(amountCell.textContent) || 0;
+                return sum + amountValue;
+            }
+            return sum;
+        }, 0);
+    document.getElementById(totalAmountId).textContent = total.toFixed(2);
+
+    saveToLocalStorage();
+    saveStateToHistory();
+
+    if (adjustTaxPercent === 0) {
+        showNotification('Tax adjustment removed! Rates reset to original values.');
+    } else {
+        showNotification(`Tax rates adjusted successfully! Effective tax: ${adjustTaxPercent}%, Displayed GST: ${customerGSTPercent}%`);
+    }
+}
+
+function toggleGSTInclusive() {
+    if (!isGSTMode) return;
+
+    isGSTInclusive = !isGSTInclusive;
+    const button = document.getElementById('gstInclusiveBtn');
+    if (button) {
+        button.textContent = isGSTInclusive ? 'Inclusive' : 'Exclusive';
+        button.style.backgroundColor = isGSTInclusive ? '#27ae60' : '';
+    }
+}
+
+
+function updateUIForGSTMode() {
+    console.log('updateUIForGSTMode called, isGSTMode:', isGSTMode);
+
+    document.body.classList.toggle('gst-mode', isGSTMode);
+
+    // Show/hide GST inclusive button
+    const gstInclusiveBtn = document.getElementById('gstInclusiveBtn');
+    if (gstInclusiveBtn) {
+        gstInclusiveBtn.style.display = isGSTMode ? 'inline-block' : 'none';
+    }
+
+
+    // Show/hide GST-specific UI elements
+    const gstModeBtn = document.querySelector('.gst-mode-btn');
+    const companyInfoBtn = document.querySelector('.company-info-btn');
+    const customerDetailsBtn = document.querySelector('.customer-details-btn');
+    const gstCustomersBtn = document.querySelector('.gst-customers-btn');
+    const gstBillsBtn = document.querySelector('.gst-bills-btn');
+    const taxAdjustmentBtn = document.querySelector('.tax-adjustment-btn'); // NEW
+
+    // GST MODE button should ALWAYS be visible (it's the toggle)
+    if (gstModeBtn) {
+        gstModeBtn.style.display = 'flex';
+        // Update the button text based on current mode
+        const icon = gstModeBtn.querySelector('.material-icons');
+        const text = gstModeBtn.querySelector('span:not(.material-icons)') || document.createElement('span');
+        if (isGSTMode) {
+            icon.textContent = 'receipt';
+            if (!text.textContent) {
+                text.textContent = 'REGULAR MODE';
+                gstModeBtn.appendChild(text);
+            } else {
+                text.textContent = 'REGULAR MODE';
+            }
+        } else {
+            icon.textContent = 'receipt_long';
+            if (!text.textContent) {
+                text.textContent = 'GST MODE';
+                gstModeBtn.appendChild(text);
+            } else {
+                text.textContent = 'GST MODE';
+            }
+        }
+    }
+
+    // These should only be visible in GST mode
+    if (companyInfoBtn) {
+        companyInfoBtn.style.display = isGSTMode ? 'flex' : 'none';
+    }
+    if (customerDetailsBtn) {
+        customerDetailsBtn.style.display = isGSTMode ? 'flex' : 'none';
+    }
+    if (gstCustomersBtn) {
+        gstCustomersBtn.style.display = isGSTMode ? 'flex' : 'none';
+    }
+    if (gstBillsBtn) {
+        gstBillsBtn.style.display = isGSTMode ? 'flex' : 'none';
+    }
+    if (taxAdjustmentBtn) {
+        taxAdjustmentBtn.style.display = isGSTMode ? 'flex' : 'none'; // NEW
+    }
+
+    // Hide GST button in tools when in GST mode
+    const gstToolBtn = document.getElementById('gst-tool-btn');
+    if (gstToolBtn) {
+        gstToolBtn.style.display = isGSTMode ? 'none' : 'inline-block';
+    }
+    // Hide rate toggle button in GST mode
+    // Handle rate column visibility when switching modes
+    const rateToggleBtn = document.querySelector('#tools button:nth-child(6)');
+    if (rateToggleBtn) {
+        // Hide/show the toggle button based on mode
+        rateToggleBtn.style.display = isGSTMode ? 'none' : 'inline-block';
+
+        // If switching to GST mode, show rate column (GST bills need rates)
+        if (isGSTMode) {
+            hideTableColumn(document.getElementById("createListManual"), 4, "table-cell");
+            hideTableColumn(document.getElementById("copyListManual"), 4, "table-cell");
+            hideTableColumn(document.getElementById("gstCopyListManual"), 5, "table-cell");
+            rateColumnHidden = false; // Reset the state
+        } else {
+            // If switching back to normal mode, restore the previous rate column state
+            const displayStyle = rateColumnHidden ? "none" : "table-cell";
+            hideTableColumn(document.getElementById("createListManual"), 4, displayStyle);
+            hideTableColumn(document.getElementById("copyListManual"), 4, displayStyle);
+        }
+    }
+
+    // Switch between regular and GST bill containers based on current view
+    const billContainer = document.getElementById('bill-container');
+    const gstBillContainer = document.getElementById('gst-bill-container');
+    const manualContainer = document.getElementById('manual-item-container');
+
+    if (currentView === 'bill') {
+        if (isGSTMode) {
+            // Show GST bill
+            billContainer.style.display = 'none';
+            gstBillContainer.style.display = 'block';
+            manualContainer.style.display = 'none';
+            updateGSTBillDisplay();
+        } else {
+            // Show regular bill
+            billContainer.style.display = 'block';
+            gstBillContainer.style.display = 'none';
+            manualContainer.style.display = 'none';
+        }
+    } else {
+        // Show input mode
+        billContainer.style.display = 'none';
+        gstBillContainer.style.display = 'none';
+        manualContainer.style.display = 'block';
+    }
+
+    // Show HSN input in manual item container
+    const hsnInputContainer = document.getElementById('hsn-input-container');
+    if (hsnInputContainer) {
+        hsnInputContainer.style.display = isGSTMode ? 'flex' : 'none';
+    }
+    // Hide/show Add Terms button based on mode
+    const addTermsBtn = document.getElementById('addTermsListSectionBtn');
+    if (addTermsBtn) {
+        addTermsBtn.style.display = isGSTMode ? 'none' : 'flex';
+    }
+
+    console.log('updateUIForGSTMode completed');
+}
+function openCompanyInfoModal() {
+    toggleSettingsSidebar()
+    document.getElementById('company-info-modal').style.display = 'block';
+    loadCompanyInfo();
+}
+
+function closeCompanyInfoModal() {
+    document.getElementById('company-info-modal').style.display = 'none';
+}
+
+async function loadCompanyInfo() {
+    try {
+        const info = await getFromDB('companyInfo', 'companyInfo');
+        if (info) {
+            companyInfo = info;
+            document.getElementById('company-name').value = info.name || '';
+            document.getElementById('company-address').value = info.address || '';
+            document.getElementById('company-gst').value = info.gstin || '';
+            document.getElementById('company-mobile').value = info.mobile || '';
+            document.getElementById('company-email').value = info.email || '';
+            document.getElementById('company-state').value = info.state || 'Maharashtra';
+            document.getElementById('company-code').value = info.stateCode || '27';
+            document.getElementById('account-number').value = info.accountNumber || '';
+            document.getElementById('ifsc-code').value = info.ifscCode || '';
+            document.getElementById('branch').value = info.branch || '';
+            document.getElementById('bank-name').value = info.bankName || '';
+            document.getElementById('account-holder').value = info.accountHolder || '';
+
+            // Update the GST bill company info and signatory
+            updateGSTBillCompanyInfo();
+        }
+    } catch (error) {
+        console.error('Error loading company info:', error);
+    }
+}
+
+async function saveCompanyInfo() {
+    const companyData = {
+        name: document.getElementById('company-name').value,
+        address: document.getElementById('company-address').value,
+        gstin: document.getElementById('company-gst').value,
+        mobile: document.getElementById('company-mobile').value,
+        email: document.getElementById('company-email').value,
+        state: document.getElementById('company-state').value,
+        stateCode: document.getElementById('company-code').value,
+        accountNumber: document.getElementById('account-number').value,
+        ifscCode: document.getElementById('ifsc-code').value,
+        branch: document.getElementById('branch').value,
+        bankName: document.getElementById('bank-name').value,
+        accountHolder: document.getElementById('account-holder').value
+    };
+
+    try {
+        await setInDB('companyInfo', 'companyInfo', companyData);
+        companyInfo = companyData;
+        updateGSTBillCompanyInfo();
+        closeCompanyInfoModal();
+    } catch (error) {
+        console.error('Error saving company info:', error);
+    }
+}
+
+function updateGSTBillCompanyInfo() {
+    if (companyInfo) {
+        document.getElementById('gstCompanyName').textContent = companyInfo.name;
+        document.getElementById('gstCompanyAddr').textContent = companyInfo.address;
+        document.getElementById('gstCompanyGstin').textContent = companyInfo.gstin;
+        document.getElementById('gstCompanyPhone').textContent = companyInfo.mobile;
+        document.getElementById('gstCompanyEmail').textContent = companyInfo.email;
+
+        // Update the bill footer signatory
+        document.getElementById('bill-company-signatory').textContent = `for ${companyInfo.name}`;
+
+        // Update bank details
+        document.getElementById('bill-account-holder').textContent = companyInfo.accountHolder;
+        document.getElementById('bill-account-number').textContent = companyInfo.accountNumber;
+        document.getElementById('bill-ifsc-code').textContent = companyInfo.ifscCode;
+        document.getElementById('bill-branch').textContent = companyInfo.branch;
+        document.getElementById('bill-bank-name').textContent = companyInfo.bankName;
+    }
+}
+
+
+// NEW: Function to generate next invoice number
+async function generateNextInvoiceNumber() {
+    try {
+        const savedBills = await getAllFromDB('gstSavedBills');
+        let maxInvoiceNo = 0;
+
+        // Find the highest invoice number from all GST saved bills
+        savedBills.forEach(bill => {
+            if (bill.value && bill.value.invoiceDetails && bill.value.invoiceDetails.number) {
+                const invoiceNo = parseInt(bill.value.invoiceDetails.number);
+                if (!isNaN(invoiceNo) && invoiceNo > maxInvoiceNo) {
+                    maxInvoiceNo = invoiceNo;
+                }
+            }
+        });
+
+        // Set next invoice number (max + 1) or default to 1 if no bills exist
+        const nextInvoiceNo = maxInvoiceNo > 0 ? maxInvoiceNo + 1 : 1;
+        document.getElementById('invoice-no').value = nextInvoiceNo.toString().padStart(3, '0');
+
+        console.log('Generated next invoice number:', nextInvoiceNo, 'from max:', maxInvoiceNo);
+
+    } catch (error) {
+        console.error('Error generating invoice number:', error);
+        document.getElementById('invoice-no').value = '001'; // Default to 001 if error
+    }
+}
+
+function closeCustomerDetailsModal() {
+    // SAVE the current state before closing (in case user made changes)
+    saveCustomerDialogState();
+
+    document.getElementById('customer-details-modal').style.display = 'none';
+
+    // Only reset the invoice number field state, not the values
+    const invoiceNoInput = document.getElementById('invoice-no');
+    invoiceNoInput.disabled = false;
+    invoiceNoInput.style.backgroundColor = '';
+    invoiceNoInput.title = '';
+
+    // DO NOT clear any form values here
+}
+
+function handleCustomerTypeChange() {
+    const customerType = document.getElementById('customer-type').value;
+    const shipToSection = document.getElementById('ship-to-section');
+
+    if (customerType === 'both') {
+        shipToSection.style.display = 'block';
+    } else {
+        shipToSection.style.display = 'none';
+    }
+}
+
+async function handleCustomerSearch(type) {
+    const input = document.getElementById(`${type}-name`);
+    const suggestions = document.getElementById(`${type}-suggestions`);
+    const searchTerm = input.value.trim();
+
+    if (searchTerm.length < 2) {
+        suggestions.style.display = 'none';
+        return;
+    }
+
+    try {
+        const allCustomers = await getAllFromDB('gstCustomers');
+        const filtered = allCustomers.filter(customer =>
+            customer.value.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            customer.value.gstin.includes(searchTerm)
+        ).slice(0, 5);
+
+        suggestions.innerHTML = '';
+        filtered.forEach(customer => {
+            const div = document.createElement('div');
+            div.className = 'customer-suggestion-item';
+            div.textContent = `${customer.value.name} (${customer.value.gstin})`;
+            div.onclick = () => fillCustomerDetails(type, customer.value);
+            suggestions.appendChild(div);
+        });
+
+        suggestions.style.display = filtered.length > 0 ? 'block' : 'none';
+    } catch (error) {
+        console.error('Error searching customers:', error);
+    }
+}
+
+function fillCustomerDetails(type, customer) {
+    document.getElementById(`${type}-name`).value = customer.name;
+    document.getElementById(`${type}-address`).value = customer.address;
+    document.getElementById(`${type}-gst`).value = customer.gstin;
+    document.getElementById(`${type}-state`).value = customer.state;
+    document.getElementById(`${type}-code`).value = customer.stateCode;
+    document.getElementById(`${type}-contact`).value = customer.phone;
+    document.getElementById(`${type}-suggestions`).style.display = 'none';
+
+    // Auto-detect transaction type based on state code
+    if (companyInfo && customer.stateCode !== companyInfo.stateCode) {
+        document.getElementById('transaction_type').value = 'interstate';
+    } else {
+        document.getElementById('transaction_type').value = 'intrastate';
+    }
+}
+
+
+// NEW: Function to check for duplicate invoice numbers
+async function checkDuplicateInvoiceNumber(invoiceNo) {
+    try {
+        const savedBills = await getAllFromDB('gstSavedBills');
+
+        for (const bill of savedBills) {
+            if (bill.value.invoiceDetails && bill.value.invoiceDetails.number === invoiceNo) {
+                return true; // Duplicate found
+            }
+        }
+        return false; // No duplicate found
+
+    } catch (error) {
+        console.error('Error checking duplicate invoice number:', error);
+        return false; // Assume no duplicate on error
+    }
+}
+
+function formatDateForDisplay(dateString) {
+    if (!dateString || typeof dateString !== "string") return "N/A";
+
+    try {
+        // Normalize possible separators (/, .)
+        let safeDate = dateString.replace(/\./g, "-").replace(/\//g, "-");
+
+        const parts = safeDate.split("-");
+
+        // Case 1 ✅ yyyy-mm-dd (from HTML date input)
+        if (parts.length === 3 && parts[0].length === 4) {
+            const [yyyy, mm, dd] = parts;
+            return `${dd.padStart(2, "0")}-${mm.padStart(2, "0")}-${yyyy}`;
+        }
+
+        // Case 2 ✅ dd-mm-yyyy (already correct)
+        if (parts.length === 3 && parts[2].length === 4) {
+            const [dd, mm, yyyy] = parts;
+            return `${dd.padStart(2, "0")}-${mm.padStart(2, "0")}-${yyyy}`;
+        }
+
+        // Fallback ✅ Use JavaScript parser for other formats
+        const parsedDate = new Date(dateString);
+        if (!isNaN(parsedDate.getTime())) {
+            const dd = String(parsedDate.getDate()).padStart(2, "0");
+            const mm = String(parsedDate.getMonth() + 1).padStart(2, "0");
+            const yyyy = parsedDate.getFullYear();
+            return `${dd}-${mm}-${yyyy}`;
+        }
+
+        // Last fallback: return what was given
+        return dateString;
+
+    } catch (err) {
+        return dateString;
+    }
+}
+
+
+function updateGSTTaxCalculation() {
+    // Safety check - only proceed if in GST mode and GST bill container exists
+    if (!isGSTMode) return;
+
+    const gstBillContainer = document.getElementById('gst-bill-container');
+    if (!gstBillContainer || gstBillContainer.style.display === 'none') {
+        return; // GST bill not visible, skip calculation
+    }
+
+    const items = Array.from(document.querySelectorAll('#gstCopyListManual tbody tr[data-id]'));
+    let subtotal = 0;
+    const taxData = {};
+
+    items.forEach(row => {
+        const amountCell = row.querySelector('.amount');
+        if (amountCell) {
+            const amount = parseFloat(amountCell.textContent) || 0;
+            subtotal += amount;
+
+            const hsn = row.getAttribute('data-hsn') || 'N/A';
+            if (!taxData[hsn]) {
+                taxData[hsn] = {
+                    taxableValue: 0,
+                    items: 0
+                };
+            }
+            taxData[hsn].taxableValue += amount;
+            taxData[hsn].items += 1;
+        }
+    });
+
+    // Calculate discount with precision
+    const discountAmount = storeWithPrecision(subtotal * (discountPercent / 100));
+    const taxableValue = storeWithPrecision(subtotal - discountAmount);
+
+    // Calculate taxes with precision
+    let cgstAmount = 0;
+    let sgstAmount = 0;
+    let igstAmount = 0;
+
+    if (transactionType === 'intrastate') {
+        cgstAmount = storeWithPrecision(taxableValue * (currentGSTPercent / 200));
+        sgstAmount = storeWithPrecision(taxableValue * (currentGSTPercent / 200));
+    } else {
+        igstAmount = storeWithPrecision(taxableValue * (currentGSTPercent / 100));
+    }
+
+    // ROUND OFF GRAND TOTAL to nearest whole number for display only
+    const grandTotal = Math.round(taxableValue + cgstAmount + sgstAmount + igstAmount);
+
+    // Update display with rounded values - safely get elements each time
+    try {
+        const gstSubTotalEl = document.getElementById('gst-sub-total');
+        const gstDiscountAmountEl = document.getElementById('gst-discount-amount');
+        const gstDiscountPercentEl = document.getElementById('gst-discount-percent');
+        const gstCgstAmountEl = document.getElementById('gst-cgst-amount');
+        const gstSgstAmountEl = document.getElementById('gst-sgst-amount');
+        const gstIgstAmountEl = document.getElementById('gst-igst-amount');
+        const gstGrandTotalEl = document.getElementById('gst-grand-total');
+
+        // Only update if elements exist (GST bill is visible)
+        if (gstSubTotalEl) gstSubTotalEl.textContent = roundToTwoDecimals(subtotal).toFixed(2);
+        if (gstDiscountAmountEl) gstDiscountAmountEl.textContent = `-${roundToTwoDecimals(discountAmount).toFixed(2)}`;
+        if (gstDiscountPercentEl) gstDiscountPercentEl.textContent = roundToTwoDecimals(discountPercent);
+        if (gstCgstAmountEl) gstCgstAmountEl.textContent = roundToTwoDecimals(cgstAmount).toFixed(2);
+        if (gstSgstAmountEl) gstSgstAmountEl.textContent = roundToTwoDecimals(sgstAmount).toFixed(2);
+        if (gstIgstAmountEl) gstIgstAmountEl.textContent = roundToTwoDecimals(igstAmount).toFixed(2);
+        if (gstGrandTotalEl) gstGrandTotalEl.textContent = roundToTwoDecimals(grandTotal).toFixed(2);
+
+        // Update discount row label
+        const gstDiscountRow = document.getElementById('gst-discount-row');
+        if (gstDiscountRow && gstDiscountRow.cells && gstDiscountRow.cells[0]) {
+            gstDiscountRow.cells[0].textContent = `Discount (${roundToTwoDecimals(discountPercent)}%)`;
+        }
+
+        // Show/hide rows based on conditions
+        const gstDiscountRowDisplay = document.getElementById('gst-discount-row');
+        const gstCgstRow = document.getElementById('gst-cgst-row');
+        const gstSgstRow = document.getElementById('gst-sgst-row');
+        const gstIgstRow = document.getElementById('gst-igst-row');
+
+        // Only show discount row if discountPercent > 0 AND discountAmount > 0
+        if (gstDiscountRowDisplay) {
+            gstDiscountRowDisplay.style.display = (discountPercent > 0 && discountAmount > 0) ? '' : 'none';
+        }
+        if (gstCgstRow) gstCgstRow.style.display = transactionType === 'intrastate' ? '' : 'none';
+        if (gstSgstRow) gstSgstRow.style.display = transactionType === 'intrastate' ? '' : 'none';
+        if (gstIgstRow) gstIgstRow.style.display = transactionType === 'interstate' ? '' : 'none';
+
+    } catch (error) {
+        console.log('GST elements not available for update (normal during view switching)');
+    }
+
+    // Update tax breakdown table with discounted taxable value
+    updateTaxBreakdownTable(taxData, taxableValue, cgstAmount, sgstAmount, igstAmount);
+
+    // Update amount in words (without decimal part)
+    updateAmountInWords(grandTotal);
+}
+
+function updateTaxBreakdownTable(taxData, taxableValue, cgstAmount, sgstAmount, igstAmount) {
+    const tbody = document.getElementById('bill-tax-tbody');
+    tbody.innerHTML = '';
+
+    if (Object.keys(taxData).length === 0) {
+        const row = document.createElement('tr');
+        row.id = 'gst-no-tax-data';
+        row.innerHTML = `<td colspan="7" class="align-center">No tax data available</td>`;
+        tbody.appendChild(row);
+        return;
+    }
+
+    Object.entries(taxData).forEach(([hsn, data]) => {
+        const row = document.createElement('tr');
+        const cgstRate = transactionType === 'intrastate' ? (currentGSTPercent / 2).toFixed(2) + '%' : '-';
+        const sgstRate = transactionType === 'intrastate' ? (currentGSTPercent / 2).toFixed(2) + '%' : '-';
+        const itemCgst = transactionType === 'intrastate' ? (data.taxableValue * (currentGSTPercent / 200)).toFixed(2) : '0.00';
+        const itemSgst = transactionType === 'intrastate' ? (data.taxableValue * (currentGSTPercent / 200)).toFixed(2) : '0.00';
+        const totalTax = (parseFloat(itemCgst) + parseFloat(itemSgst)).toFixed(2);
+
+        row.innerHTML = `
+            <td>${hsn}</td>
+            <td style="text-align:center;">${data.taxableValue.toFixed(2)}</td>
+            <td style="text-align:center;">${cgstRate}</td>
+            <td>${itemCgst}</td>
+            <td>${sgstRate}</td>
+            <td>${itemSgst}</td>
+            <td>${totalTax}</td>
+        `;
+        tbody.appendChild(row);
+    });
+
+    // Add totals row with discounted taxable value
+    const totalsRow = document.createElement('tr');
+    totalsRow.id = 'tax-section-totals';
+    const totalTaxAmount = (cgstAmount + sgstAmount + igstAmount).toFixed(2);
+    totalsRow.innerHTML = `
+        <td class="align-center"><strong>TOTAL</strong></td>
+        <td class="align-center"><strong>${taxableValue.toFixed(2)}</strong></td>
+        <td></td>
+        <td class="align-center"><strong>${cgstAmount.toFixed(2)}</strong></td>
+        <td></td>
+        <td class="align-center"><strong>${sgstAmount.toFixed(2)}</strong></td>
+        <td class="align-center"><strong>${totalTaxAmount}</strong></td>
+    `;
+    tbody.appendChild(totalsRow);
+}
+
+function updateAmountInWords(amount) {
+    // Add safety check to prevent errors with invalid amounts
+    if (isNaN(amount) || amount === 0) {
+        document.getElementById('bill-amount-words').textContent = 'Rupees Zero Only';
+        return;
+    }
+
+    try {
+        const words = convertNumberToWords(amount);
+        document.getElementById('bill-amount-words').textContent = `Rupees ${words} Only`;
+    } catch (error) {
+        console.error('Error converting amount to words:', error);
+        document.getElementById('bill-amount-words').textContent = 'Rupees Zero Only';
+    }
+}
+
+// Basic number to words converter (you might want to use a more robust library)
+function convertNumberToWords(num) {
+    // Round off to nearest whole number first
+    const roundedNum = Math.round(num);
+
+    if (roundedNum === 0) return 'Zero';
+
+    const units = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
+    const teens = ['Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+    const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+    const thousands = ['', 'Thousand', 'Lakh', 'Crore'];
+
+    let n = roundedNum;
+    let words = '';
+
+    if (n === 0) {
+        words = 'Zero';
+    } else {
+        // Convert whole part only (no decimal handling)
+        let numStr = n.toString();
+        let groups = [];
+
+        // Indian numbering system: groups of 2 digits after the first 3
+        if (numStr.length > 3) {
+            groups.push(numStr.substr(-3));
+            numStr = numStr.substr(0, numStr.length - 3);
+
+            while (numStr.length > 2) {
+                groups.push(numStr.substr(-2));
+                numStr = numStr.substr(0, numStr.length - 2);
+            }
+            if (numStr.length > 0) {
+                groups.push(numStr);
+            }
+        } else {
+            groups.push(numStr);
+        }
+
+        groups = groups.reverse();
+
+        for (let i = 0; i < groups.length; i++) {
+            let group = parseInt(groups[i]);
+            if (group === 0) continue;
+
+            let groupWords = '';
+            const hundreds = Math.floor(group / 100);
+            const remainder = group % 100;
+
+            if (hundreds > 0) {
+                groupWords += units[hundreds] + ' Hundred ';
+            }
+
+            if (remainder > 0) {
+                if (remainder < 10) {
+                    groupWords += units[remainder] + ' ';
+                } else if (remainder < 20) {
+                    groupWords += teens[remainder - 10] + ' ';
+                } else {
+                    const tensDigit = Math.floor(remainder / 10);
+                    const unitsDigit = remainder % 10;
+                    groupWords += tens[tensDigit] + ' ';
+                    if (unitsDigit > 0) {
+                        groupWords += units[unitsDigit] + ' ';
+                    }
+                }
+            }
+
+            if (i < groups.length - 1) {
+                groupWords += thousands[groups.length - 1 - i] + ' ';
+            }
+
+            words += groupWords;
+        }
+
+        words = words.trim();
+    }
+
+    // Return only the whole number part without "and XX/100"
+    return words;
+}
+
+function openGSTManageCustomersModal() {
+    document.getElementById('gst-manage-customers-modal').style.display = 'block';
+    loadGSTCustomersList();
+}
+
+function closeGSTManageCustomersModal() {
+    document.getElementById('gst-manage-customers-modal').style.display = 'none';
+}
+
+function openAddGSTCustomerModal() {
+    currentlyEditingCustomerId = null;
+    document.getElementById('add-gst-customer-modal-title').textContent = 'Add New GST Customer';
+    document.getElementById('save-gst-customer-btn').textContent = 'Save GST Customer';
+
+    // RESET ALL FIELDS
+    document.getElementById('saved-gst-customer-name').value = '';
+    document.getElementById('saved-gst-customer-address').value = '';
+    document.getElementById('saved-gst-customer-phone').value = '';
+    document.getElementById('saved-gst-customer-gstin').value = '';
+    document.getElementById('saved-gst-customer-state').value = 'Maharashtra';
+    document.getElementById('saved-gst-customer-state-code').value = '27';
+    document.getElementById('saved-gst-customer-email').value = '';
+
+    document.getElementById('add-gst-customer-modal').style.display = 'block';
+}
+
+function closeAddGSTCustomerModal() {
+    document.getElementById('add-gst-customer-modal').style.display = 'none';
+    currentlyEditingCustomerId = null; // ADD THIS LINE
+}
+
+async function saveGSTCustomerDataToLocalStorage() {
+    const gstCustomerData = {
+        invoiceNo: document.getElementById('invoice-no').value,
+        invoiceDate: document.getElementById('invoice-date').value,
+        gstPercent: parseFloat(document.getElementById('gst-percent-input').value),
+        customerType: document.getElementById('customer-type').value,
+        transactionType: document.getElementById('transaction_type').value,
+
+        // Bill To data - ADD CONTACT FIELD
+        billTo: {
+            name: document.getElementById('consignee-name').value,
+            address: document.getElementById('consignee-address').value,
+            gstin: document.getElementById('consignee-gst').value,
+            contact: document.getElementById('consignee-contact').value, // THIS WAS MISSING
+            state: document.getElementById('consignee-state').value,
+            stateCode: document.getElementById('consignee-code').value
+        },
+
+        // Ship To data - ADD CONTACT FIELD  
+        shipTo: {
+            name: document.getElementById('buyer-name').value,
+            address: document.getElementById('buyer-address').value,
+            gstin: document.getElementById('buyer-gst').value,
+            contact: document.getElementById('buyer-contact').value, // THIS WAS MISSING
+            state: document.getElementById('buyer-state').value,
+            stateCode: document.getElementById('buyer-code').value,
+            placeOfSupply: document.getElementById('place-of-supply').value
+        },
+
+        timestamp: Date.now()
+    };
+
+    await setInDB('gstMode', 'gstCustomerData', gstCustomerData);
+
+    // Also update the bill view immediately with contact numbers
+    document.getElementById('billToContact').textContent = document.getElementById('consignee-contact').value || 'Not provided';
+    if (document.getElementById('customer-type').value === 'both') {
+        document.getElementById('shipToContact').textContent = document.getElementById('buyer-contact').value || 'Not provided';
+    }
+}
+
+async function saveGSTCustomer() {
+    const customerName = document.getElementById('saved-gst-customer-name').value.trim();
+    const address = document.getElementById('saved-gst-customer-address').value.trim();
+    const phone = document.getElementById('saved-gst-customer-phone').value.trim();
+    const gstin = document.getElementById('saved-gst-customer-gstin').value.trim();
+    const state = document.getElementById('saved-gst-customer-state').value.trim();
+    const stateCode = document.getElementById('saved-gst-customer-state-code').value.trim();
+    const email = document.getElementById('saved-gst-customer-email').value.trim();
+
+    if (!customerName) {
+        showNotification('Please enter a customer name');
+        return;
+    }
+
+    const customerData = {
+        name: customerName,
+        address: address,
+        phone: phone,
+        gstin: gstin,
+        state: state,
+        stateCode: stateCode,
+        email: email,
+        timestamp: Date.now()
+    };
+
+    try {
+        // CHECK IF EDITING EXISTING CUSTOMER
+        if (currentlyEditingCustomerId) {
+            // UPDATE existing customer
+            await setInDB('gstCustomers', currentlyEditingCustomerId, customerData);
+            showNotification('GST customer updated successfully!', 'success');
+        } else {
+            // CREATE new customer
+            const customerId = `gst-customer-${Date.now()}`;
+            await setInDB('gstCustomers', customerId, customerData);
+            showNotification('GST customer saved successfully!', 'success');
+        }
+
+        await loadGSTCustomersList();
+        closeAddGSTCustomerModal();
+        // RESET editing state
+        currentlyEditingCustomerId = null;
+    } catch (error) {
+        console.error('Error saving GST customer:', error);
+    }
+}
+
+// Load GST Customers
+async function loadGSTCustomersList() {
+    try {
+        const customers = await getAllFromDB('gstCustomers');
+        const customersList = document.getElementById('customers-list');
+        customersList.innerHTML = '';
+
+        if (customers.length === 0) {
+            customersList.innerHTML = '<div class="customer-card">No GST customers saved yet</div>';
+            return;
+        }
+
+        customers.forEach(customer => {
+            const customerCard = document.createElement('div');
+            customerCard.className = 'customer-card';
+            customerCard.innerHTML = `
+    <div class="customer-header">
+        <div class="customer-name">${customer.value.name}</div>
+        <div class="customer-actions">
+            <button class="btn-payment" data-customer-name="${customer.value.name}" data-gstin="${customer.value.gstin || ''}">Payment & Credit Note</button>
+            <button class="btn-ledger" data-customer-name="${customer.value.name}" data-gstin="${customer.value.gstin || ''}">Ledger</button>
+            <button class="btn-edit" onclick="editGSTCustomer('${customer.id}')">Edit</button>
+            <button class="btn-delete" onclick="deleteGSTCustomer('${customer.id}')">Delete</button>
+        </div>
+    </div>
+    <div class="customer-details-text">
+        <div>Address: ${customer.value.address || 'Not provided'}</div>
+        <div>Phone: ${customer.value.phone || customer.value.contact || 'Not provided'}</div>
+        <div>GSTIN: ${customer.value.gstin || 'Not provided'}</div>
+        <div>State: ${customer.value.state || 'Not provided'}, Code: ${customer.value.stateCode || 'Not provided'}</div>
+        <div>Email: ${customer.value.email || 'Not provided'}</div>
+    </div>
+`;
+            customersList.appendChild(customerCard);
+        });
+    } catch (error) {
+        console.error('Error loading GST customers list:', error);
+    }
+}
+
+function searchGSTCustomers() {
+    const searchTerm = document.getElementById('gst-customer-search').value.toLowerCase();
+    const customerCards = document.querySelectorAll('#gst-customers-list .customer-card');
+
+    customerCards.forEach(card => {
+        const customerName = card.querySelector('.customer-name').textContent.toLowerCase();
+        const customerDetails = card.querySelector('.customer-details-text').textContent.toLowerCase();
+
+        if (customerName.includes(searchTerm) || customerDetails.includes(searchTerm)) {
+            card.style.display = 'block';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+}
+
+async function editGSTCustomer(customerId) {
+    try {
+        const customer = await getFromDB('gstCustomers', customerId);
+        if (customer) {
+            currentlyEditingCustomerId = customerId;
+            document.getElementById('add-gst-customer-modal-title').textContent = 'Edit GST Customer';
+            document.getElementById('save-gst-customer-btn').textContent = 'Update GST Customer';
+
+            // PROPERLY FILL ALL FORM FIELDS
+            document.getElementById('saved-gst-customer-name').value = customer.name || '';
+            document.getElementById('saved-gst-customer-address').value = customer.address || '';
+            document.getElementById('saved-gst-customer-phone').value = customer.phone || '';
+            document.getElementById('saved-gst-customer-gstin').value = customer.gstin || '';
+            document.getElementById('saved-gst-customer-state').value = customer.state || 'Maharashtra';
+            document.getElementById('saved-gst-customer-state-code').value = customer.stateCode || '27';
+            document.getElementById('saved-gst-customer-email').value = customer.email || '';
+
+            document.getElementById('add-gst-customer-modal').style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Error editing GST customer:', error);
+        showNotification('Error loading customer for editing', 'error');
+    }
+}
+
+async function deleteGSTCustomer(customerId) {
+    const shouldDeleteGstcustomer = await showConfirm('Are you sure you want to delete this GST customer?');
+    if (shouldDeleteGstcustomer) {
+        try {
+            await removeFromDB('gstCustomers', customerId);
+            await loadGSTCustomersList();
+        } catch (error) {
+            console.error('Error deleting GST customer:', error);
+        }
+    }
+}
+
+function openGSTSavedBillsModal() {
+    document.getElementById('gst-saved-bills-modal').style.display = 'block';
+    loadGSTSavedBillsList();
+}
+
+function closeGSTSavedBillsModal() {
+    document.getElementById('gst-saved-bills-modal').style.display = 'none';
+}
+
+async function autoSaveGSTCustomer() {
+    const customerName = document.getElementById('billToName').textContent.trim();
+    const customerGSTIN = document.getElementById('billToGstin').textContent.trim();
+
+    if (!customerName) return; // No customer name, skip auto-save
+
+    // Check if customer already exists in GST customers
+    const existingCustomers = await getAllFromDB('gstCustomers');
+    const customerExists = existingCustomers.some(customer =>
+        customer.value.name === customerName || customer.value.gstin === customerGSTIN
+    );
+
+    if (customerExists) {
+        console.log('GST customer already exists, skipping auto-save');
+        return;
+    }
+
+    // Only save if GSTIN is provided and different (not placeholder)
+    if (!customerGSTIN || customerGSTIN === 'customer 15-digit GSTIN' || customerGSTIN === 'N/A') {
+        console.log('No valid GSTIN provided, skipping GST customer auto-save');
+        return;
+    }
+
+    // Create GST customer data
+    const customerData = {
+        name: customerName,
+        address: document.getElementById('billToAddr').textContent.trim(),
+        phone: '', // GST bill doesn't have phone field
+        gstin: customerGSTIN,
+        state: document.getElementById('billToState').textContent.trim() || 'Maharashtra',
+        stateCode: document.getElementById('billToStateCode').textContent.trim() || '27',
+        email: '',
+        timestamp: Date.now()
+    };
+
+    try {
+        const customerId = `gst-customer-${Date.now()}`;
+        await setInDB('gstCustomers', customerId, customerData);
+        console.log('GST customer auto-saved:', customerName);
+    } catch (error) {
+        console.error('Error auto-saving GST customer:', error);
+    }
+}
+function areGSTCustomerDetailsFilled() {
+    const billToName = document.getElementById('billToName').textContent.trim();
+    const billToAddr = document.getElementById('billToAddr').textContent.trim();
+    const billToGstin = document.getElementById('billToGstin').textContent.trim();
+
+    // Check if basic customer details are filled (not empty or placeholder)
+    if (!billToName ||
+        !billToAddr ||
+        billToGstin === 'customer 15-digit GSTIN' ||
+        billToName === 'jhone doe' ||
+        billToAddr === 'new york city') {
+        return false;
+    }
+
+    return true;
+}
+
+async function saveGSTCurrentBill() {
+    console.log('Edit Mode:', editMode, 'Bill ID:', currentEditingBillId, 'Bill Type:', currentEditingBillType);
+    if (!areGSTCustomerDetailsFilled()) {
+        showNotification('Please fill customer details in GST mode', 'error');
+        return;
+    }
+
+
+    const customerName = document.getElementById('billToName').textContent.trim();
+    const invoiceNo = document.getElementById('bill-invoice-no').textContent.trim() || 'No Invoice Number';
+    const totalAmount = document.getElementById('gst-grand-total').textContent || '0.00';
+
+    // Check for duplicate invoice number in edit mode
+    if (!editMode) {
+        const isDuplicate = await checkDuplicateBillNumber(invoiceNo, 'gst');
+        if (isDuplicate) {
+            showNotification('Invoice number already exists! Please use a different number.', 'error');
+            return;
+        }
+    }
+
+    // Auto-save GST customer if doesn't exist
+    await autoSaveGSTCustomer();
+
+    try {
+        const currentData = await getGSTBillData();
+        if (!currentData) return;
+
+        // Add item count calculation
+        const itemCount = document.querySelectorAll('#createListManual tbody tr[data-id]').length;
+
+        const savedBill = {
+            ...currentData,
+            title: `${customerName} - ${invoiceNo}`,
+            totalAmount: totalAmount,
+            timestamp: Date.now(),
+            date: document.getElementById('bill-date-gst').textContent || new Date().toLocaleDateString(),
+            itemCount: itemCount // Add this line
+        };
+
+        let billId;
+        if (editMode && currentEditingBillId) {
+            // Edit mode: Update existing bill with the SAME ID
+            billId = currentEditingBillId;
+            await setInDB('gstSavedBills', billId, savedBill);
+            // ADD STOCK REDUCTION HERE - for GST edit mode
+            await reduceStockOnSave();
+            showNotification('GST Bill updated successfully!');
+
+            // Reset edit mode
+            resetEditMode();
+        } else {
+            // Normal mode: Create new bill
+            billId = `gst-saved-bill-${Date.now()}`;
+            await setInDB('gstSavedBills', billId, savedBill);
+            // ADD STOCK REDUCTION HERE - for GST edit mode
+            await reduceStockOnSave();
+            showNotification('GST Bill saved successfully!');
+        }
+
+    } catch (error) {
+        console.error('Error saving GST bill:', error);
+        showNotification('Error saving GST bill');
+    }
+}
+
+async function getGSTBillData() {
+    const data = {
+        company: companyInfo,
+        customer: {
+            billTo: {
+                name: document.getElementById('billToName').textContent,
+                address: document.getElementById('billToAddr').textContent,
+                gstin: document.getElementById('billToGstin').textContent,
+                contact: document.getElementById('billToContact').textContent,
+                state: document.getElementById('billToState').textContent,
+                stateCode: document.getElementById('billToStateCode').textContent,
+
+            },
+            shipTo: {
+                name: document.getElementById('shipToName').textContent,
+                address: document.getElementById('shipToAddr').textContent,
+                gstin: document.getElementById('shipToGstin').textContent,
+                contact: document.getElementById('shipToContact').textContent,
+                state: document.getElementById('shipToState').textContent,
+                stateCode: document.getElementById('shipToStateCode').textContent,
+                placeOfSupply: document.getElementById('shipToPOS').textContent
+            }
+        },
+        invoiceDetails: {
+            number: document.getElementById('bill-invoice-no').textContent,
+            date: document.getElementById('bill-date-gst').textContent
+        },
+        customerType: document.getElementById('customer-type').value,
+        taxSettings: {
+            transactionType: transactionType,
+            gstPercent: currentGSTPercent,
+            discountPercent: discountPercent
+        },
+        tableStructure: [], // ADD THIS LINE - SAVE SECTIONS AND ITEMS IN ORDER
+        items: [],
+        totals: {
+            subtotal: parseFloat(document.getElementById('gst-sub-total').textContent) || 0,
+            discount: parseFloat(document.getElementById('gst-discount-amount').textContent.replace('-', '')) || 0,
+            cgst: parseFloat(document.getElementById('gst-cgst-amount').textContent) || 0,
+            sgst: parseFloat(document.getElementById('gst-sgst-amount').textContent) || 0,
+            igst: parseFloat(document.getElementById('gst-igst-amount').textContent) || 0,
+            grandTotal: parseFloat(document.getElementById('gst-grand-total').textContent) || 0
+        }
+    };
+
+    // ADD THIS BLOCK: Save complete table structure (sections + items in order)
+    document.querySelectorAll('#gstCopyListManual tbody tr').forEach(row => {
+        if (row.classList.contains('section-row')) {
+            // Save section data
+            const sectionId = row.getAttribute('data-section-id');
+            const cell = row.querySelector('td');
+
+            // Extract section name (without any button text)
+            let sectionName = '';
+            for (let node of cell.childNodes) {
+                if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+                    sectionName = node.textContent.trim();
+                    break;
+                }
+            }
+
+            data.tableStructure.push({
+                type: 'section',
+                id: sectionId,
+                name: sectionName,
+                style: cell.getAttribute('style') || ''
+            });
+        } else if (row.getAttribute('data-id')) {
+            // Save item data
+            const cells = row.children;
+            const particularsDiv = cells[1];
+            const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
+            const notes = particularsDiv.querySelector('.notes')?.textContent || '';
+
+            data.tableStructure.push({
+                type: 'item',
+                id: row.getAttribute('data-id'),
+                itemName: itemName,
+                hsn: row.getAttribute('data-hsn') || '',
+                quantity: cells[3].textContent,
+                unit: cells[4].textContent,
+                rate: parseFloat(cells[5].textContent).toFixed(2),
+                amount: parseFloat(cells[6].textContent).toFixed(2),
+                notes: notes
+            });
+
+            // Also add to items array for backward compatibility
+            data.items.push({
+                id: row.getAttribute('data-id'),
+                itemName: itemName,
+                hsn: row.getAttribute('data-hsn') || '',
+                quantity: cells[3].textContent,
+                unit: cells[4].textContent,
+                rate: parseFloat(cells[5].textContent).toFixed(2),
+                amount: parseFloat(cells[6].textContent).toFixed(2),
+                notes: notes
+            });
+        }
+    });
+
+    return data;
+}
+
+
+async function loadGSTSavedBillsList() {
+    try {
+        const savedBills = await getAllFromDB('gstSavedBills');
+        const billsList = document.getElementById('saved-bills-list');
+        billsList.innerHTML = '';
+
+        if (savedBills.length === 0) {
+            billsList.innerHTML = '<div class="saved-bill-card">No GST bills saved yet</div>';
+            return;
+        }
+
+        savedBills.sort((a, b) => b.value.timestamp - a.value.timestamp);
+
+        savedBills.forEach(bill => {
+            const billCard = document.createElement('div');
+            billCard.className = 'saved-bill-card';
+            billCard.innerHTML = `
+                <div class="saved-bill-header">
+                    <div class="saved-bill-title">${bill.value.title}</div>
+                    <div class="saved-bill-total">₹${bill.value.totalAmount}</div>
+                </div>
+                <div class="saved-bill-details">
+                    <div>Date: ${bill.value.date}</div>
+                    <div>Customer: ${bill.value.customer?.billTo?.name || 'N/A'}</div>
+                   <div>Items: ${bill.value.items?.length || bill.value.itemCount || 0}</div>
+                    <div>Type: ${bill.value.taxSettings?.transactionType || 'N/A'}</div>
+                </div>
+                <div class="saved-bill-actions">
+                  <button class="btn-edit" onclick="editSavedBill('${bill.id}', 'gst', event)">
+                        <i class="material-icons">edit</i> Edit
+                    </button>
+                    <button class="btn-delete" onclick="deleteSavedBill('${bill.id}', 'gst', event)">
+                        <i class="material-icons">delete</i> Delete
+                    </button>
+                </div>
+            `;
+
+
+            // Regular click loads bill without edit mode
+            // Regular click loads bill without edit mode
+            billCard.addEventListener('click', (e) => {
+                if (!e.target.closest('.saved-bill-actions')) {
+                    resetEditMode(); // Ensure edit mode is off
+
+                    // USE THE SAME LOADING LOGIC AS EDIT MODE BUT WITHOUT SETTING EDIT MODE
+                    loadGSTSavedBill(bill.id);
+                    closeSavedBillsModal();
+
+                    // ADD THIS LINE: Save the loaded state
+                    saveToLocalStorage();
+
+                    // Force the same display updates that happen in edit mode
+                    setTimeout(() => {
+                        if (isGSTMode) {
+                            copyItemsToGSTBill();
+                            updateGSTTaxCalculation();
+                            updateGSTBillDisplay(); // Force refresh the display
+                        }
+                    }, 100);
+                }
+            });
+
+            billsList.appendChild(billCard);
+        });
+
+    } catch (error) {
+        console.error('Error loading GST saved bills:', error);
+    }
+    // Update column visibility after loading GST saved bill
+    updateColumnVisibility();
+    await saveToLocalStorage();
+
+}
+
+async function loadGSTSavedBill(billId) {
+    try {
+        const savedBill = await getFromDB('gstSavedBills', billId);
+        if (!savedBill) return;
+
+        // Load company info
+        if (savedBill.companyInfo) {
+            companyInfo = savedBill.companyInfo;
+            updateGSTBillCompanyInfo();
+        }
+
+        // Load customer details to GST bill display
+        if (savedBill.customer) {
+            document.getElementById('billToName').textContent = savedBill.customer.billTo?.name || '';
+            document.getElementById('billToAddr').textContent = savedBill.customer.billTo?.address || '';
+            document.getElementById('billToGstin').textContent = savedBill.customer.billTo?.gstin || 'customer 15-digit GSTIN';
+            document.getElementById('billToContact').textContent = savedBill.customer.billTo?.contact || '';
+            document.getElementById('billToState').textContent = savedBill.customer.billTo?.state || 'maharashtra';
+            document.getElementById('billToStateCode').textContent = savedBill.customer.billTo?.stateCode || '27';
+
+            // ALSO FILL CUSTOMER DETAILS DIALOG FORM
+            document.getElementById('consignee-name').value = savedBill.customer.billTo?.name || '';
+            document.getElementById('consignee-address').value = savedBill.customer.billTo?.address || '';
+            document.getElementById('consignee-gst').value = savedBill.customer.billTo?.gstin || '';
+            document.getElementById('consignee-state').value = savedBill.customer.billTo?.state || 'Maharashtra';
+            document.getElementById('consignee-code').value = savedBill.customer.billTo?.stateCode || '27';
+            document.getElementById('consignee-contact').value = savedBill.customer.billTo?.contact || '';
+
+            // Handle ship to section - USE THE SAVED CUSTOMER TYPE
+            const shipToDiv = document.getElementById('shipTo');
+            if (savedBill.customerType === 'both' && savedBill.customer.shipTo?.name) {
+                shipToDiv.style.display = 'block';
+                document.getElementById('shipToName').textContent = savedBill.customer.shipTo.name;
+                document.getElementById('shipToAddr').textContent = savedBill.customer.shipTo.address;
+                document.getElementById('shipToGstin').textContent = savedBill.customer.shipTo.gstin;
+                document.getElementById('shipToContact').textContent = savedBill.customer.shipTo?.contact || '';
+                document.getElementById('shipToState').textContent = savedBill.customer.shipTo.state;
+                document.getElementById('shipToStateCode').textContent = savedBill.customer.shipTo.stateCode;
+                document.getElementById('shipToPOS').textContent = savedBill.customer.shipTo.placeOfSupply;
+
+                // ALSO FILL SHIP TO IN CUSTOMER DETAILS DIALOG
+                document.getElementById('buyer-name').value = savedBill.customer.shipTo?.name || '';
+                document.getElementById('buyer-address').value = savedBill.customer.shipTo?.address || '';
+                document.getElementById('buyer-gst').value = savedBill.customer.shipTo?.gstin || '';
+                document.getElementById('buyer-state').value = savedBill.customer.shipTo?.state || 'Maharashtra';
+                document.getElementById('buyer-code').value = savedBill.customer.shipTo?.stateCode || '27';
+                document.getElementById('buyer-contact').value = savedBill.customer.shipTo?.contact || '';
+                document.getElementById('place-of-supply').value = savedBill.customer.shipTo?.placeOfSupply || 'Maharashtra';
+            } else {
+                shipToDiv.style.display = 'none';
+            }
+        }
+
+        // Load invoice details
+        if (savedBill.invoiceDetails) {
+            document.getElementById('bill-invoice-no').textContent = savedBill.invoiceDetails.number;
+            document.getElementById('bill-date-gst').textContent = savedBill.invoiceDetails.date;
+
+            // ALSO FILL INVOICE DETAILS IN CUSTOMER DIALOG FORM
+            document.getElementById('invoice-no').value = savedBill.invoiceDetails.number || '';
+            document.getElementById('invoice-date').value = savedBill.invoiceDetails?.date || '';
+        }
+
+        if (savedBill.customerType) {
+            document.getElementById('customer-type').value = savedBill.customerType;
+            handleCustomerTypeChange(); // This will show/hide Ship To section
+        }
+
+        // Load tax settings
+        if (savedBill.taxSettings) {
+            transactionType = savedBill.taxSettings.transactionType || 'intrastate';
+            currentGSTPercent = savedBill.taxSettings.gstPercent || 18;
+            discountPercent = savedBill.taxSettings.discountPercent || 0;
+        }
+
+        // Clear current items and load saved items
+        const createListTbody = document.querySelector("#createListManual tbody");
+        const copyListTbody = document.querySelector("#copyListManual tbody");
+        const gstListTbody = document.querySelector("#gstCopyListManual tbody");
+
+        createListTbody.innerHTML = "";
+        copyListTbody.innerHTML = "";
+        if (gstListTbody) gstListTbody.innerHTML = "";
+
+        // Load table structure (sections + items in order)
+        if (savedBill.tableStructure && savedBill.tableStructure.length > 0) {
+            let maxId = 0;
+            savedBill.tableStructure.forEach(rowData => {
+                if (rowData.type === 'section') {
+                    createSectionInAllTablesFromSaved(rowData);
+                } else if (rowData.type === 'item') {
+                    // Create item in all tables
+                    createItemInAllTablesFromSaved({
+                        type: 'item',
+                        id: rowData.id,
+                        itemName: rowData.itemName,
+                        quantity: rowData.quantity,
+                        unit: rowData.unit,
+                        rate: parseFloat(rowData.rate),
+                        amount: parseFloat(rowData.amount),
+                        notes: rowData.notes,
+                        dimensionType: rowData.dimensionType,
+                        dimensionValues: rowData.dimensionValues,
+                        dimensionUnit: rowData.dimensionUnit,
+                        hsnCode: rowData.hsn,
+                        productCode: rowData.productCode,
+                        discountType: rowData.discountType,
+                        discountValue: rowData.discountValue
+                    });
+
+                    const idNum = parseInt(rowData.id.split('-')[2]);
+                    if (idNum > maxId) maxId = idNum;
+                }
+            });
+            rowCounterManual = maxId + 1;
+        }
+        // Backward compatibility: Load old items structure if no tableStructure
+        else if (savedBill.items && savedBill.items.length > 0) {
+            let maxId = 0;
+            savedBill.items.forEach(item => {
+                // Create item in all tables
+                createItemInAllTablesFromSaved({
+                    type: 'item',
+                    id: item.id,
+                    itemName: item.itemName,
+                    quantity: item.quantity,
+                    unit: item.unit,
+                    rate: parseFloat(item.rate),
+                    amount: parseFloat(item.amount),
+                    notes: item.notes,
+                    dimensionType: item.dimensionType,
+                    dimensionValues: item.dimensionValues,
+                    dimensionUnit: item.dimensionUnit,
+                    hsnCode: item.hsn,
+                    productCode: item.productCode,
+                    discountType: item.discountType,
+                    discountValue: item.discountValue
+                });
+
+                const idNum = parseInt(item.id.split('-')[2]);
+                if (idNum > maxId) maxId = idNum;
+            });
+            rowCounterManual = maxId + 1;
+        }
+
+        updateSerialNumbers();
+        updateTotal();
+
+        if (isGSTMode) {
+            copyItemsToGSTBill();
+            updateGSTTaxCalculation();
+        }
+
+        // Save the loaded state
+        await saveToLocalStorage();
+        saveStateToHistory();
+        // ADD THIS LINE RIGHT HERE:
+        await saveCustomerDialogState();
+
+        // Store the saved invoice data for when customer modal is opened
+        window.currentSavedBillInvoiceData = {
+            number: savedBill.invoiceDetails?.number,
+            date: savedBill.invoiceDetails?.date
+        };
+        showNotification('GST bill loaded successfully');
+
+        // FORCE REFRESH THE BILL DISPLAY - THIS IS THE KEY FIX
+        setTimeout(() => {
+            updateGSTBillDisplay();
+            copyItemsToGSTBill();
+            updateGSTTaxCalculation();
+
+            // Ensure customer details are visible in bill view
+            if (savedBill.customer) {
+                document.getElementById('billToName').textContent = savedBill.customer.billTo?.name || '';
+                document.getElementById('billToAddr').textContent = savedBill.customer.billTo?.address || '';
+                document.getElementById('billToGstin').textContent = savedBill.customer.billTo?.gstin || 'customer 15-digit GSTIN';
+                document.getElementById('billToContact').textContent = savedBill.customer.billTo?.contact || 'Not provided';
+                document.getElementById('billToState').textContent = savedBill.customer.billTo?.state || 'maharashtra';
+                document.getElementById('billToStateCode').textContent = savedBill.customer.billTo?.stateCode || '27';
+
+                // Handle ship to section
+                const shipToDiv = document.getElementById('shipTo');
+                if (savedBill.customerType === 'both' && savedBill.customer.shipTo?.name) {
+                    shipToDiv.style.display = 'block';
+                    document.getElementById('shipToName').textContent = savedBill.customer.shipTo.name;
+                    document.getElementById('shipToAddr').textContent = savedBill.customer.shipTo.address;
+                    document.getElementById('shipToGstin').textContent = savedBill.customer.shipTo.gstin;
+                    document.getElementById('shipToContact').textContent = savedBill.customer.shipTo?.contact || 'Not provided';
+                    document.getElementById('shipToState').textContent = savedBill.customer.shipTo.state;
+                    document.getElementById('shipToStateCode').textContent = savedBill.customer.shipTo.stateCode;
+                    document.getElementById('shipToPOS').textContent = savedBill.customer.shipTo.placeOfSupply;
+                } else {
+                    shipToDiv.style.display = 'none';
+                }
+            }
+
+            // Update invoice details in bill view
+            if (savedBill.invoiceDetails) {
+                document.getElementById('bill-invoice-no').textContent = savedBill.invoiceDetails.number;
+                document.getElementById('bill-date-gst').textContent = savedBill.invoiceDetails.date;
+            }
+
+        }, 100);
+
+    } catch (error) {
+        console.error('Error loading GST saved bill:', error);
+        showNotification('Error loading GST bill', 'error');
+    }
+    await saveToLocalStorage();
+}
+
+function updateGSTBillDisplay() {
+    if (!isGSTMode) return;
+
+    // Safety check - only proceed if GST bill container exists and is visible
+    const gstBillContainer = document.getElementById('gst-bill-container');
+    if (!gstBillContainer || gstBillContainer.style.display === 'none') {
+        return; // GST bill not visible, skip update
+    }
+
+    // Update company details if available - with safety checks
+    if (companyInfo) {
+        const gstCompanyNameEl = document.getElementById('gstCompanyName');
+        const gstCompanyAddrEl = document.getElementById('gstCompanyAddr');
+        const gstCompanyGstinEl = document.getElementById('gstCompanyGstin');
+        const gstCompanyPhoneEl = document.getElementById('gstCompanyPhone');
+        const gstCompanyEmailEl = document.getElementById('gstCompanyEmail');
+
+        if (gstCompanyNameEl) gstCompanyNameEl.textContent = companyInfo.name || 'COMPANY NAME';
+        if (gstCompanyAddrEl) gstCompanyAddrEl.textContent = companyInfo.address || 'Address';
+        if (gstCompanyGstinEl) gstCompanyGstinEl.textContent = companyInfo.gstin || 'Your 15-digit GSTIN';
+        if (gstCompanyPhoneEl) gstCompanyPhoneEl.textContent = companyInfo.mobile || '+91 1234567890';
+        if (gstCompanyEmailEl) gstCompanyEmailEl.textContent = companyInfo.email || 'abcd@gmail.com';
+    }
+
+    // Copy items from regular table to GST table
+    copyItemsToGSTBill();
+
+    // Update totals and tax calculations (with safety check inside the function)
+    updateGSTTaxCalculation();
+}
+
+function copyItemsToGSTBill() {
+    const regularTable = document.querySelector('#copyListManual tbody');
+    const gstTable = document.querySelector('#gstCopyListManual tbody');
+
+    if (!regularTable || !gstTable) return;
+
+    // Clear GST table first
+    gstTable.innerHTML = '';
+
+    // Copy ALL rows (both sections and items) from regular table to GST table
+    const regularRows = regularTable.querySelectorAll('tr');
+    let itemCounter = 0;
+
+    regularRows.forEach((regularRow) => {
+        if (regularRow.classList.contains('section-row')) {
+            // Handle section rows
+            const sectionId = regularRow.getAttribute('data-section-id');
+            const cell = regularRow.querySelector('td');
+            const name = cell.textContent.replace('−', '').replace('+', '').trim();
+            const styleString = cell.getAttribute('style') || '';
+
+            // Create section row for GST table with JUST THE NAME (no buttons)
+            const gstRow = document.createElement('tr');
+            gstRow.className = 'section-row';
+            gstRow.setAttribute('data-section-id', sectionId);
+            gstRow.setAttribute('draggable', 'true');
+
+            gstRow.innerHTML = `
+        <td colspan="8" style="${styleString}">
+            ${name}
+        </td>
+    `;
+
+            addDragAndDropListeners(gstRow);
+            gstTable.appendChild(gstRow);
+        } else if (regularRow.getAttribute('data-id')) {
+            // Handle item rows - increment counter only for items
+            itemCounter++;
+
+            const cells = regularRow.children;
+            const particularsDiv = cells[1];
+            const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
+            const notes = particularsDiv.querySelector('.notes')?.textContent || '';
+
+            // Get HSN from saved item if available
+            let hsnCode = regularRow.getAttribute('data-hsn') || '';
+
+            // Get the ADJUSTED rate from the regular table
+            const adjustedRate = parseFloat(cells[4].textContent) || 0;
+            const adjustedAmount = parseFloat(cells[5].textContent) || 0;
+
+            // Create GST table row with the ADJUSTED rate
+            const gstRow = document.createElement('tr');
+            gstRow.setAttribute('data-id', regularRow.getAttribute('data-id'));
+            gstRow.setAttribute('data-hsn', hsnCode);
+
+            gstRow.innerHTML = `
+                <td class="sr-no">${itemCounter}</td>
+                <td>${particularsDiv.innerHTML}</td>
+                <td>${hsnCode}</td>
+                <td>${cells[2].textContent}</td>
+                <td>${cells[3].textContent}</td>
+                <td>${adjustedRate.toFixed(2)}</td>
+                <td class="amount">${adjustedAmount.toFixed(2)}</td>
+                
+            `;
+
+            // Copy all data attributes including adjusted rates
+            const attributes = ['data-dimension-type', 'data-dimension-values', 'data-dimension-unit', 'data-original-quantity', 'data-product-code', 'data-discount-type', 'data-discount-value', 'data-rate', 'data-amount', 'data-original-rate'];
+            attributes.forEach(attr => {
+                if (regularRow.hasAttribute(attr)) {
+                    gstRow.setAttribute(attr, regularRow.getAttribute(attr));
+                }
+            });
+
+            addDragAndDropListeners(gstRow);
+            gstTable.appendChild(gstRow);
+        }
+    });
+
+    // Update GST calculations after copying items
+    updateGSTTaxCalculation();
+}
+
+//GST STATE SAVE
+async function saveGSTStateToDB() {
+    if (!isGSTMode) return;
+
+    const gstState = {
+        companyInfo: companyInfo,
+        customerDetails: {
+            billTo: {
+                name: document.getElementById('billToName').textContent,
+                address: document.getElementById('billToAddr').textContent,
+                gstin: document.getElementById('billToGstin').textContent,
+                state: document.getElementById('billToState').textContent,
+                stateCode: document.getElementById('billToStateCode').textContent
+            },
+            shipTo: {
+                name: document.getElementById('shipToName').textContent,
+                address: document.getElementById('shipToAddr').textContent,
+                gstin: document.getElementById('shipToGstin').textContent,
+                state: document.getElementById('shipToState').textContent,
+                stateCode: document.getElementById('shipToStateCode').textContent,
+                placeOfSupply: document.getElementById('shipToPOS').textContent
+            }
+        },
+        invoiceDetails: {
+            number: document.getElementById('bill-invoice-no').textContent,
+            date: document.getElementById('bill-date-gst').textContent
+        },
+        taxSettings: {
+            transactionType: transactionType,
+            gstPercent: currentGSTPercent,
+            discountPercent: discountPercent
+        },
+        items: await getGSTItemsData(),
+        timestamp: Date.now()
+    };
+
+    await setInDB('gstMode', 'currentGSTState', gstState);
+}
+
+async function getGSTItemsData() {
+    const items = [];
+    document.querySelectorAll('#gstCopyListManual tbody tr[data-id]').forEach(row => {
+        const cells = row.children;
+        const particularsDiv = cells[1];
+        const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
+        const notes = particularsDiv.querySelector('.notes')?.textContent || '';
+
+        items.push({
+            id: row.getAttribute('data-id'),
+            itemName: itemName,
+            hsn: row.getAttribute('data-hsn') || '',
+            quantity: cells[3].textContent,
+            unit: cells[4].textContent,
+            rate: parseFloat(cells[5].textContent).toFixed(2),
+            amount: parseFloat(cells[6].textContent).toFixed(2),
+            notes: notes
+        });
+    });
+    return items;
+}
+
+// Load GST state on initialization
+async function loadGSTStateFromDB() {
+    if (!isGSTMode) return;
+
+    try {
+        const gstState = await getFromDB('gstMode', 'currentGSTState');
+        if (gstState) {
+            // Load GST state here
+            console.log('Loaded GST state:', gstState);
+        }
+    } catch (error) {
+        console.error('Error loading GST state:', error);
+    }
+}
+
+// Save customer dialog state
+async function saveCustomerDialogState() {
+    const customerState = {
+        customerType: document.getElementById('customer-type').value,
+        invoiceNo: document.getElementById('invoice-no').value,
+        invoiceDate: document.getElementById('invoice-date').value,
+        gstPercent: document.getElementById('gst-percent-input').value,
+        transactionType: document.getElementById('transaction_type').value,
+
+        // Bill To details
+        consigneeName: document.getElementById('consignee-name').value,
+        consigneeAddress: document.getElementById('consignee-address').value,
+        consigneeGst: document.getElementById('consignee-gst').value,
+        consigneeState: document.getElementById('consignee-state').value,
+        consigneeCode: document.getElementById('consignee-code').value,
+        consigneeContact: document.getElementById('consignee-contact').value, // ADD THIS LINE
+
+        // Ship To details
+        buyerName: document.getElementById('buyer-name').value,
+        buyerAddress: document.getElementById('buyer-address').value,
+        buyerGst: document.getElementById('buyer-gst').value,
+        buyerState: document.getElementById('buyer-state').value,
+        buyerCode: document.getElementById('buyer-code').value,
+        buyerContact: document.getElementById('buyer-contact').value, // ADD THIS LINE
+        placeOfSupply: document.getElementById('place-of-supply').value,
+
+        timestamp: Date.now()
+    };
+
+    await setInDB('gstMode', 'customerDialogState', customerState);
+}
+
+// Load customer dialog state
+async function loadCustomerDialogState() {
+    try {
+        const customerState = await getFromDB('gstMode', 'customerDialogState');
+        if (customerState) {
+            // Restore form values
+            document.getElementById('customer-type').value = customerState.customerType || 'bill-to';
+            // Update visibility based on customer type
+            handleCustomerTypeChange();
+            document.getElementById('invoice-no').value = customerState.invoiceNo || '';
+
+            // Handle date format conversion if needed
+            // let invoiceDate = customerState.invoiceDate || '';
+            // if (invoiceDate && invoiceDate.includes('-')) {
+            //     // Convert from yyyy-mm-dd to dd/mm/yyyy
+            //     const [year, month, day] = invoiceDate.split('-');
+            //     invoiceDate = `${day}-${month}-${year}`;
+            // }
+            // document.getElementById('invoice-date').value = invoiceDate;
+            document.getElementById('invoice-date').value = customerState.invoiceDate || '';
+
+            document.getElementById('gst-percent-input').value = customerState.gstPercent || '18';
+            document.getElementById('transaction_type').value = customerState.transactionType || 'intrastate';
+
+            // Restore Bill To details
+            document.getElementById('consignee-name').value = customerState.consigneeName || '';
+            document.getElementById('consignee-address').value = customerState.consigneeAddress || '';
+            document.getElementById('consignee-gst').value = customerState.consigneeGst || '';
+            document.getElementById('consignee-contact').value = customerState.consigneeContact || '';
+            document.getElementById('consignee-state').value = customerState.consigneeState || 'Maharashtra';
+            document.getElementById('consignee-code').value = customerState.consigneeCode || '27';
+            document.getElementById('consignee-contact').value = customerState.consigneeContact || '';
+
+            // Restore Ship To details
+            document.getElementById('buyer-name').value = customerState.buyerName || '';
+            document.getElementById('buyer-address').value = customerState.buyerAddress || '';
+            document.getElementById('buyer-gst').value = customerState.buyerGst || '';
+            document.getElementById('buyer-contact').value = customerState.buyerContact || '';
+            document.getElementById('buyer-state').value = customerState.buyerState || 'Maharashtra';
+            document.getElementById('buyer-code').value = customerState.buyerCode || '27';
+            document.getElementById('buyer-contact').value = customerState.buyerContact || '';
+            document.getElementById('place-of-supply').value = customerState.placeOfSupply || 'Maharashtra';
+
+            // Update visibility based on customer type
+            handleCustomerTypeChange();
+
+            // NEW: Also update bill view with the loaded customer data
+            document.getElementById('bill-invoice-no').textContent = customerState.invoiceNo || '';
+            document.getElementById('bill-date-gst').textContent = formatDateForDisplay(customerState.invoiceDate) || '';
+
+            document.getElementById('billToName').textContent = customerState.consigneeName || '';
+            document.getElementById('billToAddr').textContent = customerState.consigneeAddress || '';
+            document.getElementById('billToGstin').textContent = customerState.consigneeGst || 'customer 15-digit GSTIN';
+            document.getElementById('billToContact').textContent = customerState.consigneeContact || 'Not provided';
+            document.getElementById('billToState').textContent = customerState.consigneeState || 'Maharashtra';
+            document.getElementById('billToStateCode').textContent = customerState.consigneeCode || '27';
+
+            if (customerState.customerType === 'both') {
+                document.getElementById('shipTo').style.display = 'block';
+                document.getElementById('shipToName').textContent = customerState.buyerName || '';
+                document.getElementById('shipToAddr').textContent = customerState.buyerAddress || '';
+                document.getElementById('shipToGstin').textContent = customerState.buyerGst || 'customer 15-digit GSTIN';
+                document.getElementById('shipToContact').textContent = customerState.buyerContact || 'Not provided';
+                document.getElementById('shipToState').textContent = customerState.buyerState || 'Maharashtra';
+                document.getElementById('shipToStateCode').textContent = customerState.buyerCode || '27';
+                document.getElementById('shipToPOS').textContent = customerState.placeOfSupply || 'Maharashtra';
+            } else {
+                document.getElementById('shipTo').style.display = 'none';
+            }
+        } else {
+            // NEW: If no saved state, set defaults
+            document.getElementById('customer-type').value = 'bill-to';
+            document.getElementById('gst-percent-input').value = '18';
+            document.getElementById('transaction_type').value = 'intrastate';
+            document.getElementById('consignee-state').value = 'Maharashtra';
+            document.getElementById('consignee-code').value = '27';
+            document.getElementById('buyer-state').value = 'Maharashtra';
+            document.getElementById('buyer-code').value = '27';
+            document.getElementById('place-of-supply').value = 'Maharashtra';
+
+            // ADD THIS: Set today's date as default
+            const today = new Date();
+            const day = String(today.getDate()).padStart(2, '0');
+            const month = String(today.getMonth() + 1).padStart(2, '0');
+            const year = today.getFullYear();
+            document.getElementById('invoice-date').value = `${day}-${month}-${year}`;
+
+            handleCustomerTypeChange();
+        }
+    } catch (error) {
+        console.error('Error loading customer dialog state:', error);
+    }
+    // Also update Bill View with the loaded contact numbers
+    document.getElementById('billToContact').textContent = document.getElementById('consignee-contact').value || 'Not provided';
+    if (document.getElementById('customer-type').value === 'both') {
+        document.getElementById('shipToContact').textContent = document.getElementById('buyer-contact').value || 'Not provided';
+    }
+}
+function openCustomerDetailsModal() {
+    document.getElementById('customer-details-modal').style.display = 'block';
+
+    // REMOVE any code that resets the form values here
+    // The form should already have the saved state from loadCustomerDialogState()
+
+    // Check if we're in edit mode and disable invoice number field
+    const invoiceNoInput = document.getElementById('invoice-no');
+    if (editMode && currentEditingBillId) {
+        invoiceNoInput.disabled = true;
+        invoiceNoInput.style.backgroundColor = '#f5f5f5';
+        invoiceNoInput.title = 'Invoice number cannot be changed in edit mode';
+    } else {
+        invoiceNoInput.disabled = false;
+        invoiceNoInput.style.backgroundColor = '';
+        invoiceNoInput.title = '';
+    }
+
+    // Check if we have saved bill invoice data (for loaded bills)
+    if (window.currentSavedBillInvoiceData) {
+        // Use saved bill's invoice data
+        document.getElementById('invoice-no').value = window.currentSavedBillInvoiceData.number || '';
+        document.getElementById('invoice-date').value = window.currentSavedBillInvoiceData?.date || '';
+
+        // Clear the stored data after using it
+        window.currentSavedBillInvoiceData = null;
+    }
+    // If no saved bill data, the form should keep its current state
+
+    showCustomerDetailsSummary();
+}
+
+// NEW: Function to show customer details summary in the modal
+function showCustomerDetailsSummary() {
+    const invoiceNo = document.getElementById('invoice-no').value;
+    const invoiceDate = document.getElementById('invoice-date').value;
+
+    // You can add this summary display in your modal HTML or as a notification
+    console.log('Customer Details - Invoice:', invoiceNo, 'Date:', invoiceDate);
+}
+
+
+async function saveCustomerDetails() {
+    const invoiceNo = document.getElementById('invoice-no').value.trim();
+    const invoiceDate = document.getElementById('invoice-date').value;
+    const gstPercent = parseFloat(document.getElementById('gst-percent-input').value);
+    const customerType = document.getElementById('customer-type').value;
+
+    // FIX: Proper duplicate check for edit mode
+    if (editMode && currentEditingBillId) {
+        // In edit mode, only check duplicate if invoice number changed
+        if (invoiceNo !== window.currentEditingBillOriginalNumber) {
+            const isDuplicate = await checkDuplicateInvoiceNumber(invoiceNo);
+            if (isDuplicate) {
+                showNotification('Invoice number already exists! Please use a different number.', 'error');
+                return;
+            }
+        }
+    } else {
+        // Normal mode - always check duplicate
+        const isDuplicate = await checkDuplicateInvoiceNumber(invoiceNo);
+        if (isDuplicate) {
+            showNotification('Invoice number already exists! Please use a different number.', 'error');
+            return;
+        }
+    }
+
+    // Update GST bill header
+    document.getElementById('bill-invoice-no').textContent = invoiceNo;
+    document.getElementById('bill-date-gst').textContent = formatDateForDisplay(invoiceDate);
+
+    // Update bill to details
+    document.getElementById('billToName').textContent = document.getElementById('consignee-name').value;
+    document.getElementById('billToAddr').textContent = document.getElementById('consignee-address').value;
+    document.getElementById('billToGstin').textContent = document.getElementById('consignee-gst').value;
+    document.getElementById('billToState').textContent = document.getElementById('consignee-state').value;
+    document.getElementById('billToStateCode').textContent = document.getElementById('consignee-code').value;
+    document.getElementById('billToContact').textContent = document.getElementById('consignee-contact').value || '';
+    // Update ship to details if applicable
+    const shipToDiv = document.getElementById('shipTo');
+    if (customerType === 'both') {
+        shipToDiv.style.display = 'block';
+        document.getElementById('shipToName').textContent = document.getElementById('buyer-name').value;
+        document.getElementById('shipToAddr').textContent = document.getElementById('buyer-address').value;
+        document.getElementById('shipToGstin').textContent = document.getElementById('buyer-gst').value;
+        document.getElementById('shipToContact').textContent = document.getElementById('buyer-contact').value || '';
+        document.getElementById('shipToState').textContent = document.getElementById('buyer-state').value;
+        document.getElementById('shipToStateCode').textContent = document.getElementById('buyer-code').value;
+        document.getElementById('shipToPOS').textContent = document.getElementById('place-of-supply').value;
+    } else {
+        shipToDiv.style.display = 'none';
+    }
+
+    // Update transaction type and GST percent
+    transactionType = document.getElementById('transaction_type').value;
+    currentGSTPercent = gstPercent;
+
+    // Save customer dialog state before closing
+    await saveCustomerDialogState();
+
+    // ADD THIS: Save GST customer data to localStorage
+    await saveGSTCustomerDataToLocalStorage();
+
+    closeCustomerDetailsModal();
+    updateGSTTaxCalculation();
+
+    // Save GST state to DB
+    await saveGSTStateToDB();
+
+    // Show success notification
+    showNotification('Customer details saved successfully!', 'success');
+}
+// Add auto-save on input changes
+function setupCustomerDialogAutoSave() {
+    const inputs = [
+        'customer-type', 'invoice-no', 'invoice-date', 'gst-percent-input', 'transaction_type',
+        'consignee-name', 'consignee-address', 'consignee-gst', 'consignee-state', 'consignee-code', 'consignee-contact',
+        'buyer-name', 'buyer-address', 'buyer-gst', 'buyer-state', 'buyer-code', 'buyer-contact', 'place-of-supply',
+        'invoice-no',
+        'invoice-date'
+    ];
+
+    inputs.forEach(id => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.addEventListener('input', debounce(saveCustomerDialogState, 1000));
+            element.addEventListener('change', saveCustomerDialogState);
+        }
+    });
+}
+
+// Debounce function to prevent too many saves
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+
+
+// Add click handlers for section editing to all tables
+document.addEventListener('click', function (e) {
+    // Check if click is on a section row (but not the collapse button)
+    const sectionRow = e.target.closest('.section-row');
+    if (sectionRow && !e.target.classList.contains('collapse-btn')) {
+        const sectionId = sectionRow.getAttribute('data-section-id');
+        if (sectionId) {
+            editSection(sectionId);
+        }
+    }
+});
+function handlePaddingTypeChange() {
+    const paddingType = document.getElementById('section-padding-type').value;
+    const singlePaddingGroup = document.getElementById('single-padding-group');
+    const customPaddingGroup = document.getElementById('custom-padding-group');
+
+    if (paddingType === 'custom') {
+        singlePaddingGroup.style.display = 'none';
+        customPaddingGroup.style.display = 'block';
+    } else if (paddingType === '') {
+        singlePaddingGroup.style.display = 'none';
+        customPaddingGroup.style.display = 'none';
+    } else {
+        singlePaddingGroup.style.display = 'block';
+        customPaddingGroup.style.display = 'none';
+    }
+}
+
+function resetSectionModal() {
+    // Reset all fields to default values
+    document.getElementById('section-name').value = '';
+    document.getElementById('section-align').value = 'left';
+    document.getElementById('section-font-weight').value = '600';
+    document.getElementById('section-bg-color').value = '#ffe8b5';
+    document.getElementById('section-font-color').value = '#000000';
+    document.getElementById('section-font-size').value = '16';
+    document.getElementById('section-text-transform').value = 'none';
+    document.getElementById('section-padding-type').value = 'padding-left';
+    document.getElementById('section-padding-value').value = '75';
+
+    // Reset custom padding
+    document.getElementById('section-padding-left').value = '';
+    document.getElementById('section-padding-right').value = '';
+    document.getElementById('section-padding-top').value = '';
+    document.getElementById('section-padding-bottom').value = '';
+
+    // Also reset the stored state to defaults
+    sectionModalState = {
+        align: 'center',
+        fontWeight: '600',
+        bgColor: '#ffe8b5',
+        fontColor: '#000000',
+        fontSize: '16',
+        textTransform: 'none',
+        paddingType: 'padding-left',
+        paddingValue: '75',
+        paddingLeft: '',
+        paddingRight: '',
+        paddingTop: '',
+        paddingBottom: ''
+    };
+
+    // Reset visibility
+    handlePaddingTypeChange();
+}
+
+
+function openSectionModal() {
+    currentlyEditingSectionId = null;
+    document.getElementById('section-modal-title').textContent = 'Create Section';
+    document.getElementById('save-section-btn').textContent = 'Add Section';
+
+    // Reset ONLY section name, preserve all styling from previous state
+    document.getElementById('section-name').value = '';
+
+    // Pre-fill with stored modal state (if available) instead of resetting
+    document.getElementById('section-align').value = sectionModalState.align || 'left';
+    document.getElementById('section-font-weight').value = sectionModalState.fontWeight || '600';
+    document.getElementById('section-bg-color').value = sectionModalState.bgColor || '#ffe8b5';
+    document.getElementById('section-font-color').value = sectionModalState.fontColor || '#000000';
+    document.getElementById('section-font-size').value = sectionModalState.fontSize || '16';
+    document.getElementById('section-text-transform').value = sectionModalState.textTransform || 'none';
+    document.getElementById('section-padding-type').value = sectionModalState.paddingType || 'padding-left';
+    document.getElementById('section-padding-value').value = sectionModalState.paddingValue || '75';
+
+    // Handle custom padding if it was stored
+    if (sectionModalState.paddingType === 'custom') {
+        document.getElementById('section-padding-left').value = sectionModalState.paddingLeft || '';
+        document.getElementById('section-padding-right').value = sectionModalState.paddingRight || '';
+        document.getElementById('section-padding-top').value = sectionModalState.paddingTop || '';
+        document.getElementById('section-padding-bottom').value = sectionModalState.paddingBottom || '';
+    }
+
+    // Update visibility based on padding type
+    handlePaddingTypeChange();
+
+    document.getElementById('section-modal').style.display = 'block';
+}
+
+function closeSectionModal() {
+    document.getElementById('section-modal').style.display = 'none';
+    currentlyEditingSectionId = null;
+    // DON'T reset sectionModalState here - keep it for next time!
+}
+
+function editSection(sectionId) {
+    const row = document.querySelector(`#createListManual tr[data-section-id="${sectionId}"]`);
+    if (!row) return;
+
+    currentlyEditingSectionId = sectionId;
+    document.getElementById('section-modal-title').textContent = 'Edit Section';
+    document.getElementById('save-section-btn').textContent = 'Update Section';
+
+    const cell = row.querySelector('td');
+
+    // Extract ONLY the section name (first text node) without any button text
+    let sectionName = '';
+    for (let node of cell.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+            sectionName = node.textContent.trim();
+            break;
+        }
+    }
+
+    document.getElementById('section-name').value = sectionName;
+    document.getElementById('section-align').value = cell.style.textAlign || 'left';
+    document.getElementById('section-bg-color').value = rgbToHex(cell.style.backgroundColor) || '#ffe8b5';
+    document.getElementById('section-font-color').value = rgbToHex(cell.style.color) || '#000000';
+    document.getElementById('section-font-size').value = parseInt(cell.style.fontSize) || 16;
+    document.getElementById('section-text-transform').value = cell.style.textTransform || 'none';
+
+    // FIX: Parse padding correctly
+    const paddingStyle = cell.style.padding || '';
+
+    if (!paddingStyle) {
+        // Handle individual padding properties
+        const pl = parseInt(cell.style.paddingLeft) || 0;
+        const pr = parseInt(cell.style.paddingRight) || 0;
+        const pt = parseInt(cell.style.paddingTop) || 0;
+        const pb = parseInt(cell.style.paddingBottom) || 0;
+
+        setPaddingValues(pl, pr, pt, pb);
+    } else {
+        // Handle combined padding property (e.g., "10px 20px 15px 5px")
+        const paddingValues = paddingStyle.split(' ').map(val => parseInt(val) || 0);
+
+        if (paddingValues.length === 1) {
+            // Single value: padding: 10px
+            setPaddingValues(paddingValues[0], paddingValues[0], paddingValues[0], paddingValues[0]);
+        } else if (paddingValues.length === 2) {
+            // Two values: padding: 10px 20px (top-bottom, left-right)
+            setPaddingValues(paddingValues[1], paddingValues[1], paddingValues[0], paddingValues[0]);
+        } else if (paddingValues.length === 3) {
+            // Three values: padding: 10px 20px 15px (top, left-right, bottom)
+            setPaddingValues(paddingValues[1], paddingValues[1], paddingValues[0], paddingValues[2]);
+        } else if (paddingValues.length === 4) {
+            // Four values: padding: 10px 20px 15px 5px (top, right, bottom, left)
+            setPaddingValues(paddingValues[3], paddingValues[1], paddingValues[0], paddingValues[2]);
+        } else {
+            setPaddingValues(0, 0, 0, 0);
+        }
+    }
+
+    document.getElementById('section-modal').style.display = 'block';
+}
+
+// Helper function to set padding values in the modal
+function setPaddingValues(left, right, top, bottom) {
+    // Determine padding type based on the values
+    if (left === right && top === bottom && left === top && left > 0) {
+        // All sides equal
+        document.getElementById('section-padding-type').value = 'padding-inline';
+        document.getElementById('section-padding-value').value = left;
+        document.getElementById('single-padding-group').style.display = 'block';
+        document.getElementById('custom-padding-group').style.display = 'none';
+    } else if (left === right && left > 0 && top === 0 && bottom === 0) {
+        // Left and right only
+        document.getElementById('section-padding-type').value = 'padding-inline';
+        document.getElementById('section-padding-value').value = left;
+        document.getElementById('single-padding-group').style.display = 'block';
+        document.getElementById('custom-padding-group').style.display = 'none';
+    } else if (top === bottom && top > 0 && left === 0 && right === 0) {
+        // Top and bottom only
+        document.getElementById('section-padding-type').value = 'padding-block';
+        document.getElementById('section-padding-value').value = top;
+        document.getElementById('single-padding-group').style.display = 'block';
+        document.getElementById('custom-padding-group').style.display = 'none';
+    } else if (left > 0 && right === 0 && top === 0 && bottom === 0) {
+        // Left only
+        document.getElementById('section-padding-type').value = 'padding-left';
+        document.getElementById('section-padding-value').value = left;
+        document.getElementById('single-padding-group').style.display = 'block';
+        document.getElementById('custom-padding-group').style.display = 'none';
+    } else if (right > 0 && left === 0 && top === 0 && bottom === 0) {
+        // Right only
+        document.getElementById('section-padding-type').value = 'padding-right';
+        document.getElementById('section-padding-value').value = right;
+        document.getElementById('single-padding-group').style.display = 'block';
+        document.getElementById('custom-padding-group').style.display = 'none';
+    } else if (top > 0 && bottom === 0 && left === 0 && right === 0) {
+        // Top only
+        document.getElementById('section-padding-type').value = 'padding-top';
+        document.getElementById('section-padding-value').value = top;
+        document.getElementById('single-padding-group').style.display = 'block';
+        document.getElementById('custom-padding-group').style.display = 'none';
+    } else if (bottom > 0 && top === 0 && left === 0 && right === 0) {
+        // Bottom only
+        document.getElementById('section-padding-type').value = 'padding-bottom';
+        document.getElementById('section-padding-value').value = bottom;
+        document.getElementById('single-padding-group').style.display = 'block';
+        document.getElementById('custom-padding-group').style.display = 'none';
+    } else if (top === bottom && left > 0 && right === 0) {
+        // Top-Left-Bottom pattern
+        document.getElementById('section-padding-type').value = 'top-left-bottom';
+        document.getElementById('section-padding-value').value = left; // Using left as the common value
+        document.getElementById('single-padding-group').style.display = 'block';
+        document.getElementById('custom-padding-group').style.display = 'none';
+    } else if (top === bottom && right > 0 && left === 0) {
+        // Top-Right-Bottom pattern
+        document.getElementById('section-padding-type').value = 'top-right-bottom';
+        document.getElementById('section-padding-value').value = right; // Using right as the common value
+        document.getElementById('single-padding-group').style.display = 'block';
+        document.getElementById('custom-padding-group').style.display = 'none';
+    } else {
+        // Custom padding (different values for each side)
+        document.getElementById('section-padding-type').value = 'custom';
+        document.getElementById('section-padding-left').value = left;
+        document.getElementById('section-padding-right').value = right;
+        document.getElementById('section-padding-top').value = top;
+        document.getElementById('section-padding-bottom').value = bottom;
+        document.getElementById('single-padding-group').style.display = 'none';
+        document.getElementById('custom-padding-group').style.display = 'block';
+    }
+
+    // Update the UI based on the selected padding type
+    handlePaddingTypeChange();
+}
+
+
+function rgbToHex(rgb) {
+    if (!rgb) return '';
+    if (rgb.startsWith('#')) return rgb;
+    const m = rgb.match(/\d+/g);
+    if (!m) return '';
+    const [r, g, b] = m.map(Number);
+    return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+
+function saveSection() {
+    const name = document.getElementById('section-name').value.trim();
+    if (!name) {
+        showNotification('Please enter a section name');
+        return;
+    }
+
+    const align = document.getElementById('section-align').value;
+    const fontWeight = document.getElementById('section-font-weight').value;
+    const bgColor = document.getElementById('section-bg-color').value;
+    const fontColor = document.getElementById('section-font-color').value;
+    const fontSize = document.getElementById('section-font-size').value + 'px';
+    const textTransform = document.getElementById('section-text-transform').value;
+    const paddingType = document.getElementById('section-padding-type').value;
+    const paddingValue = document.getElementById('section-padding-value').value;
+
+    let paddingStyle = '';
+    if (paddingType && paddingValue) {
+        if (paddingType === 'custom') {
+            const left = document.getElementById('section-padding-left').value || '0';
+            const right = document.getElementById('section-padding-right').value || '0';
+            const top = document.getElementById('section-padding-top').value || '0';
+            const bottom = document.getElementById('section-padding-bottom').value || '0';
+            paddingStyle = `padding: ${top}px ${right}px ${bottom}px ${left}px;`;
+        } else if (paddingType === 'top-left-bottom') {
+            paddingStyle = `padding-top: ${paddingValue}px; padding-left: ${paddingValue}px; padding-bottom: ${paddingValue}px;`;
+        } else if (paddingType === 'top-right-bottom') {
+            paddingStyle = `padding-top: ${paddingValue}px; padding-right: ${paddingValue}px; padding-bottom: ${paddingValue}px;`;
+        } else if (paddingType === 'padding-inline') {
+            paddingStyle = `padding-left: ${paddingValue}px; padding-right: ${paddingValue}px;`;
+        } else if (paddingType === 'padding-block') {
+            paddingStyle = `padding-top: ${paddingValue}px; padding-bottom: ${paddingValue}px;`;
+        } else {
+            paddingStyle = `${paddingType}: ${paddingValue}px;`;
+        }
+    }
+
+    const styleString = `background-color: ${bgColor}; color: ${fontColor}; font-size: ${fontSize}; font-weight: ${fontWeight}; text-transform: ${textTransform}; text-align: ${align}; ${paddingStyle}`;
+
+    // STORE THE MODAL STATE for next section creation
+    sectionModalState = {
+        align: align,
+        fontWeight: fontWeight,
+        bgColor: bgColor,
+        fontColor: fontColor,
+        fontSize: document.getElementById('section-font-size').value, // Store without 'px'
+        textTransform: textTransform,
+        paddingType: paddingType,
+        paddingValue: paddingValue,
+        // Store custom padding values if used
+        paddingLeft: document.getElementById('section-padding-left').value || '',
+        paddingRight: document.getElementById('section-padding-right').value || '',
+        paddingTop: document.getElementById('section-padding-top').value || '',
+        paddingBottom: document.getElementById('section-padding-bottom').value || ''
+    };
+
+    if (currentlyEditingSectionId) {
+        // Update existing section
+        updateSectionInAllTables(currentlyEditingSectionId, name, styleString);
+    } else {
+        // Create new section
+        createSectionInAllTables(name, styleString);
+    }
+
+    closeSectionModal();
+    saveToLocalStorage();
+    saveStateToHistory();
+}
+
+function createSectionInAllTablesFromSaved(sectionData) {
+    const tables = ['createListManual', 'copyListManual', 'gstCopyListManual'];
+
+    tables.forEach(tableId => {
+        const table = document.getElementById(tableId);
+        if (!table) return;
+
+        const tbody = table.querySelector('tbody');
+        const tr = document.createElement('tr');
+        tr.className = 'section-row';
+        tr.setAttribute('data-section-id', sectionData.id);
+        tr.setAttribute('draggable', 'true');
+
+        const colspan = tableId === 'gstCopyListManual' ? '8' : '7';
+
+        // FIX: Completely separate logic for each table type
+        let content = sectionData.name; // Default fallback
+
+        if (tableId === 'createListManual') {
+            // Input table - always show buttons
+            const buttonText = sectionData.collapsed ? '+' : '−';
+            content = `${sectionData.name} 
+                <button class="collapse-btn" onclick="toggleSection('${sectionData.id}')">${buttonText}</button>
+                <button onclick="event.stopPropagation(); removeSection('${sectionData.id}')" class="remove-btn"><span class="material-icons">close</span></button>`;
+        } else {
+            // Bill view tables - ALWAYS show only section name, ignore any saved HTML
+            content = sectionData.name;
+        }
+
+        tr.innerHTML = `
+            <td colspan="${colspan}" style="${sectionData.style || ''}">
+                ${content}
+            </td>
+        `;
+
+        // ADD DRAG LISTENERS TO SECTION ROW
+        addDragAndDropListeners(tr);
+        tbody.appendChild(tr);
+    });
+}
+
+function createSectionInAllTables(name, styleString) {
+    const sectionId = 'section-' + Date.now();
+
+    // Create for input table
+    createSectionRow('createListManual', sectionId, name, styleString);
+    // Create for regular bill table
+    createSectionRow('copyListManual', sectionId, name, styleString);
+    // Create for GST bill table
+    createSectionRow('gstCopyListManual', sectionId, name, styleString);
+}
+// And update the createSectionRow function to include stopPropagation:
+function createSectionRow(tableId, sectionId, name, styleString) {
+    const table = document.getElementById(tableId);
+    if (!table) return;
+
+    const tbody = table.querySelector('tbody');
+    const tr = document.createElement('tr');
+    tr.className = 'section-row';
+    tr.setAttribute('data-section-id', sectionId);
+    tr.setAttribute('draggable', 'true');
+
+    const colspan = tableId === 'gstCopyListManual' ? '8' : '7';
+
+    // FIX: Only show buttons in input table (createListManual)
+    let content = name;
+    if (tableId === 'createListManual') {
+        // Input table - show buttons
+        content = `${name} 
+            <button class="collapse-btn" onclick="toggleSection('${sectionId}')">−</button>
+            <button onclick="event.stopPropagation(); removeSection('${sectionId}')" class="remove-btn"><span class="material-icons">close</span></button>`;
+    } else {
+        // Bill view tables - show only section name (no buttons)
+        content = name;
+    }
+
+    tr.innerHTML = `
+        <td colspan="${colspan}" style="${styleString}">
+            ${content}
+        </td>
+    `;
+
+    // Add drag listeners to section rows too
+    addDragAndDropListeners(tr);
+    tbody.appendChild(tr);
+}
+
+
+function updateSectionInAllTables(sectionId, name, styleString) {
+    const tables = ['createListManual', 'copyListManual', 'gstCopyListManual'];
+    tables.forEach(tableId => {
+        const row = document.querySelector(`#${tableId} tr[data-section-id="${sectionId}"]`);
+        if (row) {
+            const colspan = tableId === 'gstCopyListManual' ? '8' : '7';
+
+            // FIX: Only show buttons in input table (createListManual)
+            let content = name;
+            if (tableId === 'createListManual') {
+                // Input table - show buttons
+                content = `${name} 
+                    <button class="collapse-btn" onclick="toggleSection('${sectionId}')">−</button>
+                    <button onclick="event.stopPropagation(); removeSection('${sectionId}')" class="remove-btn"><span class="material-icons">close</span></button>`;
+            } else {
+                // Bill view tables - show only section name (no buttons)
+                content = name;
+            }
+
+            row.innerHTML = `
+                <td colspan="${colspan}" style="${styleString}">
+                    ${content}
+                </td>
+            `;
+            // RE-ADD DRAG LISTENERS AFTER UPDATING HTML
+            addDragAndDropListeners(row);
+        }
+    });
+}
+function toggleSection(sectionId) {
+    const tables = ['createListManual', 'copyListManual', 'gstCopyListManual'];
+
+    // First, find the collapse state from the input table (createListManual)
+    const inputSectionRow = document.querySelector(`#createListManual tr[data-section-id="${sectionId}"]`);
+    let isCollapsed = false;
+
+    if (inputSectionRow) {
+        const button = inputSectionRow.querySelector('.collapse-btn');
+        if (button) {
+            isCollapsed = button.textContent === '+';
+            button.textContent = isCollapsed ? '−' : '+';
+        }
+    }
+
+    // Apply the same collapse state to all tables
+    tables.forEach(tableId => {
+        const sectionRow = document.querySelector(`#${tableId} tr[data-section-id="${sectionId}"]`);
+        if (!sectionRow) return;
+
+        let nextRow = sectionRow.nextElementSibling;
+        while (nextRow && !nextRow.classList.contains('section-row')) {
+            nextRow.style.display = isCollapsed ? '' : 'none';
+            nextRow = nextRow.nextElementSibling;
+        }
+    });
+
+    updateSerialNumbers();
+    saveToLocalStorage();
+    saveStateToHistory();
+}
+
+// Payment & Credit Note System
+let currentPaymentCustomer = null;
+let currentPaymentType = 'payment'; // 'payment' or 'credit-note'
+
+// Open Payment Dialog
+function openPaymentDialog(customerName, gstin) {
+    currentPaymentCustomer = { name: customerName, gstin: gstin };
+    currentPaymentType = 'payment';
+
+    document.getElementById('payment-dialog-title').textContent = `Payments - ${customerName}`;
+    document.getElementById('payment-dialog').classList.add('active');
+
+    // Set today's date as default using initializeDateInputs
+    initializeDateInputs();
+
+    loadPaymentsAndCreditNotes();
+}
+
+function initializePeriodSelector() {
+    const selectAll = document.getElementById('select-all-dates');
+    const periodInputs = document.getElementById('period-inputs');
+    const fromDateInput = document.getElementById('from-date-input');
+
+    if (selectAll && periodInputs) {
+        // Set default state
+        selectAll.checked = true;
+        periodInputs.style.display = 'none';
+    }
+
+    if (fromDateInput) {
+        // Set default from date to 3 months ago
+        const threeMonthsAgo = new Date();
+        threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+        fromDateInput.value = threeMonthsAgo.toISOString().split('T')[0];
+        fromDateInput.style.display = 'none';
+    }
+}
+
+function openLedgerDialog(customerName, gstin) {
+    console.log('Opening ledger dialog for:', customerName, gstin);
+
+    // FIX: Ensure customer data is properly set
+    if (!customerName) {
+        console.error('No customer name provided to openLedgerDialog');
+        return;
+    }
+
+    currentPaymentCustomer = {
+        name: customerName.trim(),
+        gstin: (gstin || '').trim()
+    };
+
+    // FIX: Safe element access
+    const ledgerDialog = document.getElementById('ledger-dialog');
+    const ledgerTitle = document.getElementById('ledger-dialog-title');
+
+    if (!ledgerDialog) {
+        console.error('Ledger dialog element not found');
+        return;
+    }
+
+    if (ledgerTitle) {
+        ledgerTitle.textContent = `Ledger - ${customerName}`;
+    }
+
+    ledgerDialog.classList.add('active');
+
+    // FIX: Initialize period selector
+    initializePeriodSelector();
+
+    // FIX: Load data with the stored customer
+    loadLedgerData(currentPaymentCustomer.name, currentPaymentCustomer.gstin);
+}
+
+// Close dialogs
+function closePaymentDialog() {
+    document.getElementById('payment-dialog').classList.remove('active');
+    currentPaymentCustomer = null;
+}
+
+function closeLedgerDialog() {
+    document.getElementById('ledger-dialog').classList.remove('active');
+}
+
+// Setup payment type toggle
+function setupPaymentTypeToggle() {
+    const toggleBtns = document.querySelectorAll('.toggle-btn');
+    toggleBtns.forEach(btn => {
+        btn.addEventListener('click', function () {
+            // Remove active class from all buttons
+            toggleBtns.forEach(b => b.classList.remove('active'));
+            // Add active class to clicked button
+            this.classList.add('active');
+
+            currentPaymentType = this.dataset.type;
+            updatePaymentUI();
+            loadPaymentsAndCreditNotesWithFilters();
+        });
+    });
+}
+
+async function editPaymentRecord(recordId, recordType = null) {
+    try {
+        // Use provided type or fall back to currentPaymentType
+        const type = recordType || currentPaymentType;
+        const storeName = type === 'payment' ? 'customerPayments' : 'customerCreditNotes';
+
+        // Get the record from database
+        const record = await getFromDB(storeName, recordId);
+
+        if (!record) {
+            showNotification('Record not found', 'error');
+            return;
+        }
+
+        // Store the currently editing ID and type
+        currentlyEditingPaymentId = recordId;
+        currentPaymentType = type; // Ensure we're in the correct mode
+
+        // Populate the form with record data
+        document.getElementById('payment-date').value = record.date;
+        document.getElementById('payment-method').value = record.method;
+        document.getElementById('payment-amount').value = record.amount;
+        document.getElementById('payment-notes').value = record.notes || '';
+
+        // Safe element updates
+        const formTypeLabel = document.getElementById('form-type-label');
+        const addBtnLabel = document.getElementById('add-btn-label');
+        const addPaymentBtn = document.getElementById('add-payment-btn');
+
+        const typeLabel = type === 'payment' ? 'Payment' : 'Credit Note';
+        if (formTypeLabel) formTypeLabel.textContent = typeLabel;
+        if (addBtnLabel) addBtnLabel.textContent = typeLabel;
+        if (addPaymentBtn) addPaymentBtn.innerHTML = `<i class="material-icons">save</i> Update ${typeLabel}`;
+
+        showNotification(`${typeLabel} loaded for editing`, 'info');
+
+    } catch (error) {
+        console.error('Error loading record for editing:', error);
+        showNotification('Error loading record', 'error');
+    }
+}
+
+function resetPaymentForm() {
+    // Clear form fields
+    document.getElementById('payment-date').value = '';
+    document.getElementById('payment-method').value = 'Cash';
+    document.getElementById('payment-amount').value = '';
+    document.getElementById('payment-notes').value = '';
+
+    // Reset UI to add mode
+    document.getElementById('add-payment-btn').innerHTML = '<i class="material-icons">add</i> Add <span id="add-btn-label">Payment</span>';
+
+    // Clear editing state
+    currentlyEditingPaymentId = null;
+}
+async function updatePaymentRecord() {
+    if (!currentlyEditingPaymentId) {
+        showNotification('No record selected for editing', 'error');
+        return;
+    }
+
+    const date = document.getElementById('payment-date').value;
+    const method = document.getElementById('payment-method').value;
+    const amount = parseFloat(document.getElementById('payment-amount').value);
+    const notes = document.getElementById('payment-notes').value;
+
+    // Different validation for Payments vs Credit Notes
+    if (!date || !method || isNaN(amount)) {
+        showNotification('Please fill all required fields with valid values', 'error');
+        return;
+    }
+
+    // Payment-specific validation (only positive)
+    if (currentPaymentType === 'payment' && amount <= 0) {
+        showNotification('Payment amount must be greater than 0', 'error');
+        return;
+    }
+
+    // Credit Note validation (any non-zero value)
+    if (currentPaymentType === 'credit-note' && amount === 0) {
+        showNotification('Credit Note amount cannot be zero', 'error');
+        return;
+    }
+
+    try {
+        const storeName = currentPaymentType === 'payment' ? 'customerPayments' : 'customerCreditNotes';
+
+        // Get the existing record to preserve other data
+        const existingRecord = await getFromDB(storeName, currentlyEditingPaymentId);
+
+        if (!existingRecord) {
+            showNotification('Record not found', 'error');
+            return;
+        }
+
+        // Update the record
+        const updatedRecord = {
+            ...existingRecord,
+            date: date,
+            method: method,
+            amount: amount,
+            notes: notes,
+            updatedAt: Date.now()
+        };
+
+        // Save updated record
+        await setInDB(storeName, currentlyEditingPaymentId, updatedRecord);
+
+        // Reset form and UI
+        resetPaymentForm();
+
+        // Reload the list
+        loadPaymentsAndCreditNotesWithFilters();
+
+        const typeLabel = currentPaymentType === 'payment' ? 'Payment' : 'Credit Note';
+        showNotification(`${typeLabel} updated successfully!`, 'success');
+
+    } catch (error) {
+        console.error('Error updating record:', error);
+        showNotification('Error updating record', 'error');
+    }
+}
+
+function updatePaymentUI() {
+    const typeLabel = currentPaymentType === 'payment' ? 'Payment' : 'Credit Note';
+
+    // Safe element access with null checks
+    const formTypeLabel = document.getElementById('form-type-label');
+    const addBtnLabel = document.getElementById('add-btn-label');
+    const listTypeLabel = document.getElementById('list-type-label');
+
+    if (formTypeLabel) formTypeLabel.textContent = typeLabel;
+    if (addBtnLabel) addBtnLabel.textContent = typeLabel;
+    if (listTypeLabel) listTypeLabel.textContent = typeLabel;
+}
+// Load payments and credit notes
+async function loadPaymentsAndCreditNotes() {
+    if (!currentPaymentCustomer) return;
+
+    const payments = await getCustomerPayments(currentPaymentCustomer.name, currentPaymentCustomer.gstin, currentPaymentType);
+    displayPayments(payments);
+}
+
+function displayPayments(payments) {
+    const tbody = document.getElementById('payments-tbody');
+    tbody.innerHTML = '';
+
+    if (payments.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 20px;">No records found</td></tr>';
+        return;
+    }
+
+    payments.forEach(payment => {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td>${convertToDisplayFormat(payment.date)}</td>
+            <td>${payment.method}</td>
+            <td>₹${parseFloat(payment.amount).toFixed(2)}</td>
+            <td>${payment.notes || ''}</td>
+            <td class="payment-actions">
+                <button class="edit-payment-btn" data-id="${payment.id}" data-type="${currentPaymentType}">
+                    <i class="material-icons">edit</i> Edit
+                </button>
+                <button class="delete-payment-btn" data-id="${payment.id}" data-type="${currentPaymentType}">
+                    <i class="material-icons">delete</i> Delete
+                </button>
+            </td>
+        `;
+        tbody.appendChild(row);
+    });
+}
+function displayCustomerSummary(summary) {
+    const summaryContent = document.getElementById('customer-summary-content');
+    if (!summaryContent) return;
+
+    // FIX: Safe date formatting
+    let dateRangeText = 'All Dates';
+    if (summary.dateRange) {
+        dateRangeText = summary.dateRange;
+    }
+
+    summaryContent.innerHTML = `
+        <div class="summary-item"><strong>Customer Name:</strong> ${summary.customerName || 'Unknown'}</div>
+        <div class="summary-item"><strong>GSTIN:</strong> ${summary.gstin || 'Not provided'}</div>
+        <div class="summary-item"><strong>Total Bills:</strong> ${summary.totalBills || 0}</div>
+        <div class="summary-item"><strong>Total Payments:</strong> ${summary.totalPayments || 0}</div>
+        <div class="summary-item"><strong>Total Credit Notes:</strong> ${summary.totalCreditNotes || 0}</div>
+        <div class="summary-item"><strong>Total Sub Total:</strong> ₹${(summary.subTotal || 0).toFixed(2)}</div>
+        <div class="summary-item"><strong>Total Discount:</strong> ₹${(summary.discount || 0).toFixed(2)}</div>
+        <div class="summary-item"><strong>Total Grand Total:</strong> ₹${(summary.grandTotal || 0).toFixed(2)}</div>
+        <div class="summary-item"><strong>Total Payments Amount:</strong> ₹${(summary.paymentTotal || 0).toFixed(2)}</div>
+        <div class="summary-item"><strong>Total CN:</strong> ₹${(summary.creditNoteTotal || 0).toFixed(2)}</div>
+        <div class="summary-item"><strong>Balance:</strong> ₹${(summary.balance || 0).toFixed(2)}</div>
+        <div class="summary-item"><strong>Advance Payment:</strong> ₹${(summary.advancePayment || 0).toFixed(2)}</div>
+        <div class="summary-item"><strong>Date Range:</strong> ${dateRangeText}</div>
+    `;
+}
+// View bill from ledger
+async function viewBill(billId, source) {
+    if (source === 'gst') {
+        await loadGSTSavedBill(billId);
+    } else {
+        await loadSavedBill(billId);
+    }
+    closeLedgerDialog();
+
+    // Switch to bill view
+    if (currentView !== 'bill') {
+        toggleView();
+    }
+}
+
+// Display bills table
+function displayBillsTable(bills) {
+    const tbody = document.getElementById('bills-tbody');
+    tbody.innerHTML = '';
+
+    let subTotalSum = 0;
+    let discountSum = 0;
+    let grandTotalSum = 0;
+
+    bills.forEach(bill => {
+        let invoiceNo, date, subTotal, discount, grandTotal;
+
+        if (bill.source === 'gst') {
+            invoiceNo = bill.invoiceDetails?.number || 'N/A';
+            date = bill.invoiceDetails?.date || bill.date || 'N/A';
+            subTotal = parseFloat(bill.totals?.subtotal || 0);
+            discount = parseFloat(bill.totals?.discount || 0);
+            grandTotal = parseFloat(bill.totals?.grandTotal || 0);
+        } else {
+            invoiceNo = bill.customer?.billNo || 'N/A';
+            date = bill.invoiceDetails?.date || bill.date || 'N/A';
+            // Convert yyyy-mm-dd to dd-mm-yyyy for display
+            if (date && date.includes('-') && date.length === 10) {
+                const parts = date.split('-');
+                if (parts[0].length === 4) {
+                    date = `${parts[2]}-${parts[1]}-${parts[0]}`; // dd-mm-yyyy
+                }
+            }
+            const totalAmount = parseFloat(bill.totalAmount || 0);
+            const discountPercent = bill.taxSettings?.discountPercent || 0;
+            discount = totalAmount * (discountPercent / 100);
+            const gstPercent = bill.taxSettings?.gstPercent || 0;
+            const gstAmount = (totalAmount - discount) * (gstPercent / 100);
+            subTotal = totalAmount;
+            grandTotal = totalAmount - discount + gstAmount;
+        }
+
+        subTotalSum += subTotal;
+        discountSum += discount;
+        grandTotalSum += grandTotal;
+
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td>${invoiceNo}</td>
+            <td>${convertToDisplayFormat(date)}</td> <!-- FIXED: Use date variable instead of payment.date -->
+            <td>₹${subTotal.toFixed(2)}</td>
+            <td>₹${discount.toFixed(2)}</td>
+            <td>₹${grandTotal.toFixed(2)}</td>
+            <td>
+                <button class="view-bill-btn" onclick="viewBill('${bill.id}', '${bill.source}')">
+                    <i class="material-icons">visibility</i> View
+                </button>
+            </td>
+        `;
+        tbody.appendChild(row);
+    });
+
+    // Update totals
+    document.getElementById('bills-subtotal-total').textContent = `₹${subTotalSum.toFixed(2)}`;
+    document.getElementById('bills-discount-total').textContent = `₹${discountSum.toFixed(2)}`;
+    document.getElementById('bills-grandtotal-total').textContent = `₹${grandTotalSum.toFixed(2)}`;
+}
+
+// Display payments table
+function displayPaymentsTable(payments) {
+    const tbody = document.getElementById('payments-ledger-tbody');
+    tbody.innerHTML = '';
+
+    let total = 0;
+
+    payments.forEach(payment => {
+        total += parseFloat(payment.amount);
+
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td>${formatDateForDisplay(payment.date)}</td>
+            <td>${payment.method}</td>
+            <td>₹${parseFloat(payment.amount).toFixed(2)}</td>
+            <td>${payment.notes || ''}</td>
+        `;
+        tbody.appendChild(row);
+    });
+
+    document.getElementById('payments-total').textContent = `₹${total.toFixed(2)}`;
+}
+// Display credit notes table
+function displayCreditNotesTable(creditNotes) {
+    const tbody = document.getElementById('creditnotes-tbody');
+    tbody.innerHTML = '';
+
+    let total = 0;
+
+    creditNotes.forEach(creditNote => {
+        total += parseFloat(creditNote.amount);
+
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td>${convertToDisplayFormat(creditNote.date)}</td> <!-- FIXED: Use creditNote.date instead of payment.date -->
+            <td>${creditNote.method}</td>
+            <td>₹${parseFloat(creditNote.amount).toFixed(2)}</td>
+            <td>${creditNote.notes || ''}</td>
+        `;
+        tbody.appendChild(row);
+    });
+
+    document.getElementById('creditnotes-total').textContent = `₹${total.toFixed(2)}`;
+}
+function convertToDisplayFormat(dateStr) {
+    console.log(dateStr);
+    if (!dateStr) return 'N/A';
+
+    // If already in dd-mm-yyyy format, return as is
+    if (dateStr.includes('-') && dateStr.length === 10) {
+        const parts = dateStr.split('-');
+        if (parts[0].length === 2 && parts[2].length === 4) {
+            return dateStr; // Already dd-mm-yyyy
+        }
+        // Convert yyyy-mm-dd to dd-mm-yyyy
+        if (parts[0].length === 4) {
+            return `${parts[2]}-${parts[1]}-${parts[0]}`;
+        }
+    }
+    return dateStr;
+}
+
+function handleSelectAllChange() {
+    const selectAll = document.getElementById('select-all-dates');
+    const periodInputs = document.getElementById('period-inputs');
+
+    if (selectAll && periodInputs) {
+        if (selectAll.checked) {
+            periodInputs.style.display = 'none';
+        } else {
+            periodInputs.style.display = 'flex';
+        }
+
+        loadLedgerData();
+    }
+}
+
+function handlePeriodChange() {
+    const periodSelect = document.getElementById('period-select');
+    const fromDateInput = document.getElementById('from-date-input');
+
+    if (periodSelect && fromDateInput) {
+        if (periodSelect.value === 'fromdate') {
+            fromDateInput.style.display = 'block';
+        } else {
+            fromDateInput.style.display = 'none';
+        }
+
+        loadLedgerData();
+    }
+}
+
+function getDateRangeForPeriod() {
+    const selectAll = document.getElementById('select-all-dates');
+    if (!selectAll) return null;
+
+    if (selectAll.checked) {
+        return null; // Return null to indicate no filtering (show all)
+    }
+
+    const periodSelect = document.getElementById('period-select');
+    if (!periodSelect) return null;
+
+    const today = new Date();
+    let startDate = new Date();
+
+    switch (periodSelect.value) {
+        case '1month':
+            startDate.setMonth(today.getMonth() - 1);
+            break;
+        case '3months':
+            startDate.setMonth(today.getMonth() - 3);
+            break;
+        case '6months':
+            startDate.setMonth(today.getMonth() - 6);
+            break;
+        case 'fromdate':
+            const fromDateInput = document.getElementById('from-date-input');
+            if (fromDateInput && fromDateInput.value) {
+                startDate = new Date(fromDateInput.value);
+            } else {
+                startDate.setMonth(today.getMonth() - 3);
+            }
+            break;
+        default:
+            return null;
+    }
+
+    // Format dates as dd-mm-yyyy for filtering
+    const formatDate = (date) => {
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const year = date.getFullYear();
+        return `${day}-${month}-${year}`;
+    };
+
+    return {
+        startDate: formatDate(startDate),
+        endDate: formatDate(today)
+    };
+}
+
+async function loadLedgerData(customerName, gstin) {
+    console.log('Loading ledger data for:', customerName, gstin); // Debug log
+
+    // FIX: Better parameter handling
+    if (!customerName) {
+        if (currentPaymentCustomer && currentPaymentCustomer.name) {
+            customerName = currentPaymentCustomer.name;
+            gstin = currentPaymentCustomer.gstin;
+        } else {
+            console.error('No customer selected for ledger');
+            return;
+        }
+    }
+
+    try {
+        // Get date range based on period selection
+        const dateRange = getDateRangeForPeriod();
+        console.log('Date range for filtering:', dateRange); // Debug log
+
+        const financialData = await getCustomerFinancialData(customerName, gstin, dateRange);
+        console.log('Financial data loaded:', financialData); // Debug log
+
+        const summary = calculateCustomerSummary(
+            customerName,
+            gstin,
+            financialData.bills,
+            financialData.payments,
+            financialData.creditNotes,
+            dateRange
+        );
+
+        displayCustomerSummary(summary);
+        displayBillsTable(financialData.bills);
+        displayPaymentsTable(financialData.payments);
+        displayCreditNotesTable(financialData.creditNotes);
+    } catch (error) {
+        console.error('Error loading ledger data:', error);
+    }
+}
+// Add event listeners when DOM is loaded
+document.addEventListener('DOMContentLoaded', function () {
+    // Close payment dialog
+    document.getElementById('close-payment-dialog').addEventListener('click', closePaymentDialog);
+
+    // Close ledger dialog
+    document.getElementById('close-ledger-dialog').addEventListener('click', closeLedgerDialog);
+
+    // Setup payment type toggle
+    setupPaymentTypeToggle();
+
+    // Close dialogs when clicking outside
+    document.getElementById('payment-dialog').addEventListener('click', function (e) {
+        if (e.target === this) closePaymentDialog();
+    });
+
+    document.getElementById('ledger-dialog').addEventListener('click', function (e) {
+        if (e.target === this) closeLedgerDialog();
+    });
+});
+
+async function getCustomerBills(customerName, gstin) {
+    let bills = [];
+
+    try {
+        console.log('Fetching bills for:', customerName, 'GSTIN:', gstin);
+
+        // Check GST bills first if GSTIN is provided
+        if (gstin) {
+            const gstBills = await getAllFromDB('gstSavedBills');
+            console.log('All GST bills:', gstBills.length);
+
+            const filteredGstBills = gstBills.filter(bill => {
+                const billGSTIN = bill.value.customer?.billTo?.gstin || bill.value.customer?.shipTo?.gstin;
+                return billGSTIN === gstin;
+            });
+
+            console.log('Filtered GST bills:', filteredGstBills.length);
+            bills = bills.concat(filteredGstBills.map(bill => ({
+                ...bill.value,
+                source: 'gst',
+                id: bill.id
+            })));
+        }
+
+        // Check regular bills by customer name
+        const regularBills = await getAllFromDB('savedBills');
+        console.log('All regular bills:', regularBills.length);
+
+        const regularCustomerBills = regularBills.filter(bill => {
+            const billCustomerName = bill.value.customer?.name;
+            return billCustomerName === customerName;
+        }).map(bill => ({
+            ...bill.value,
+            source: 'regular',
+            id: bill.id
+        }));
+
+        console.log('Filtered regular bills:', regularCustomerBills.length);
+        bills = bills.concat(regularCustomerBills);
+
+        console.log('Total bills found:', bills.length);
+        return bills;
+    } catch (error) {
+        console.error('Error getting customer bills:', error);
+        return [];
+    }
+}
+
+async function getCustomerFinancialData(customerName, gstin, dateRange = null) {
+    console.log('Getting financial data for:', customerName, 'with dateRange:', dateRange);
+
+    const bills = await getCustomerBills(customerName, gstin);
+    const payments = await getCustomerPayments(customerName, gstin, 'payment');
+    const creditNotes = await getCustomerPayments(customerName, gstin, 'credit-note');
+
+    console.log('Raw data - Bills:', bills.length, 'Payments:', payments.length, 'Credit Notes:', creditNotes.length);
+
+    // If no date range (Select All checked), return all data
+    if (!dateRange) {
+        console.log('No date range - returning all data');
+        return { bills, payments, creditNotes };
+    }
+
+    // Filter data based on date range
+    const filterByDateRange = (items) => {
+        return items.filter(item => {
+            const itemDate = item.date || item.invoiceDetails?.date;
+            if (!itemDate) return false;
+
+            try {
+                // Convert dd-mm-yyyy to comparable format
+                const [itemDay, itemMonth, itemYear] = itemDate.split('-');
+                const itemDateObj = new Date(`${itemYear}-${itemMonth}-${itemDay}`);
+
+                const [startDay, startMonth, startYear] = dateRange.startDate.split('-');
+                const startDateObj = new Date(`${startYear}-${startMonth}-${startDay}`);
+
+                const [endDay, endMonth, endYear] = dateRange.endDate.split('-');
+                const endDateObj = new Date(`${endYear}-${endMonth}-${endDay}`);
+
+                return itemDateObj >= startDateObj && itemDateObj <= endDateObj;
+            } catch (error) {
+                console.error('Error filtering date:', error, 'itemDate:', itemDate);
+                return false;
+            }
+        });
+    };
+
+    const filteredData = {
+        bills: filterByDateRange(bills),
+        payments: filterByDateRange(payments),
+        creditNotes: filterByDateRange(creditNotes)
+    };
+
+    console.log('Filtered data:', filteredData);
+    return filteredData;
+}
+
+function calculateCustomerSummary(customerName, gstin, bills, payments, creditNotes, dateRange = null) {
+    // Calculate bill totals
+    const billTotals = bills.reduce((acc, bill) => {
+        if (bill.source === 'gst') {
+            // GST bill totals
+            acc.subTotal += parseFloat(bill.totals?.subtotal || 0);
+            acc.discount += parseFloat(bill.totals?.discount || 0);
+            acc.grandTotal += parseFloat(bill.totals?.grandTotal || 0);
+        } else {
+            // Regular bill totals
+            const subtotal = parseFloat(bill.totalAmount || 0);
+            const discountPercent = bill.taxSettings?.discountPercent || 0;
+            const discountAmount = subtotal * (discountPercent / 100);
+            const gstPercent = bill.taxSettings?.gstPercent || 0;
+            const gstAmount = (subtotal - discountAmount) * (gstPercent / 100);
+            const grandTotal = subtotal - discountAmount + gstAmount;
+
+            acc.subTotal += subtotal;
+            acc.discount += discountAmount;
+            acc.grandTotal += grandTotal;
+        }
+        return acc;
+    }, { subTotal: 0, discount: 0, grandTotal: 0 });
+
+    // Calculate payment totals
+    const paymentTotal = payments.reduce((sum, payment) => sum + parseFloat(payment.amount), 0);
+    const creditNoteTotal = creditNotes.reduce((sum, creditNote) => sum + parseFloat(creditNote.amount), 0);
+
+    // Calculate balance
+    const totalPaymentsAndCredits = paymentTotal + creditNoteTotal;
+    const balance = billTotals.grandTotal - totalPaymentsAndCredits;
+
+    // Find date range from actual data (for display purposes)
+    const allDates = [
+        ...bills.map(bill => new Date(bill.date || bill.invoiceDetails?.date)),
+        ...payments.map(payment => new Date(payment.date)),
+        ...creditNotes.map(creditNote => new Date(creditNote.date))
+    ].filter(date => !isNaN(date.getTime()));
+
+    const minDate = allDates.length > 0 ? new Date(Math.min(...allDates)) : new Date();
+    const maxDate = allDates.length > 0 ? new Date(Math.max(...allDates)) : new Date();
+
+    // Update date range display in summary
+    let dateRangeText = 'All Dates';
+    if (dateRange) {
+        dateRangeText = `${dateRange.startDate} to ${dateRange.endDate}`;
+    } else if (allDates.length > 0) {
+        // Format dates as dd-mm-yyyy for display
+        const formatDate = (date) => {
+            const day = String(date.getDate()).padStart(2, '0');
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const year = date.getFullYear();
+            return `${day}-${month}-${year}`;
+        };
+        dateRangeText = `${formatDate(minDate)} to ${formatDate(maxDate)}`;
+    }
+
+    return {
+        customerName: customerName || 'Unknown Customer',
+        gstin: gstin || 'Not provided',
+        totalBills: bills.length,
+        totalPayments: payments.length,
+        totalCreditNotes: creditNotes.length,
+        subTotal: billTotals.subTotal,
+        discount: billTotals.discount,
+        grandTotal: billTotals.grandTotal,
+        paymentTotal: paymentTotal,
+        creditNoteTotal: creditNoteTotal,
+        balance: balance,
+        advancePayment: balance < 0 ? Math.abs(balance) : 0,
+        dateRange: dateRangeText
+    };
+}
+
+function setupPaymentDialog() {
+    // Add payment button
+    document.getElementById('add-payment-btn').addEventListener('click', addNewPayment);
+
+    // Search functionality
+    document.getElementById('payment-search').addEventListener('input', function () {
+        loadPaymentsAndCreditNotesWithFilters();
+    });
+
+    // Sort order toggle
+    document.getElementById('sort-order-btn').addEventListener('click', function () {
+        const currentOrder = this.dataset.order;
+        const newOrder = currentOrder === 'asc' ? 'desc' : 'asc';
+        this.dataset.order = newOrder;
+        this.querySelector('.material-icons').textContent = newOrder === 'asc' ? 'arrow_upward' : 'arrow_downward';
+        loadPaymentsAndCreditNotesWithFilters();
+    });
+
+    // Sort by select
+    document.getElementById('sort-by-select').addEventListener('change', function () {
+        loadPaymentsAndCreditNotesWithFilters();
+    });
+
+    // Statement period
+    document.getElementById('statement-period').addEventListener('change', function () {
+        loadPaymentsAndCreditNotesWithFilters();
+    });
+
+    // Setup edit and delete button event delegation
+    document.getElementById('payments-tbody').addEventListener('click', function (e) {
+        const editBtn = e.target.closest('.edit-payment-btn');
+        const deleteBtn = e.target.closest('.delete-payment-btn');
+
+        if (editBtn) {
+            const recordId = editBtn.dataset.id;
+            const recordType = editBtn.dataset.type;
+            editPaymentRecord(recordId, recordType);
+        }
+
+        if (deleteBtn) {
+            const recordId = deleteBtn.dataset.id;
+            const recordType = deleteBtn.dataset.type;
+            deletePaymentRecordConfirm(recordId, recordType);
+        }
+    });
+}
+
+async function deletePaymentRecordConfirm(recordId, recordType = null) {
+    const type = recordType || currentPaymentType;
+    const typeLabel = type === 'payment' ? 'Payment' : 'Credit Note';
+
+    const shouldDelete = await showConfirm(`Are you sure you want to delete this ${typeLabel.toLowerCase()}?`);
+    if (shouldDelete) {
+        try {
+            await deletePaymentRecord(recordId, type);
+            loadPaymentsAndCreditNotesWithFilters();
+            showNotification(`${typeLabel} deleted successfully`, 'success');
+        } catch (error) {
+            console.error('Error deleting record:', error);
+            showNotification('Error deleting record. Please try again.', 'error');
+        }
+    }
+}
+
+// Load payments with filters
+async function loadPaymentsAndCreditNotesWithFilters() {
+    if (!currentPaymentCustomer) return;
+
+    const filters = {
+        search: document.getElementById('payment-search').value,
+        sortBy: document.getElementById('sort-by-select').value,
+        sortOrder: document.getElementById('sort-order-btn').dataset.order,
+        period: document.getElementById('statement-period').value
+    };
+
+    const payments = await getCustomerPayments(
+        currentPaymentCustomer.name,
+        currentPaymentCustomer.gstin,
+        currentPaymentType,
+        filters
+    );
+
+    displayPayments(payments);
+}
+
+async function addNewPayment() {
+    if (!currentPaymentCustomer) return;
+
+    const date = document.getElementById('payment-date').value;
+    const method = document.getElementById('payment-method').value;
+    const amount = parseFloat(document.getElementById('payment-amount').value);
+    const notes = document.getElementById('payment-notes').value;
+
+    // Different validation for Payments vs Credit Notes
+    if (!date || !method || isNaN(amount)) {
+        showNotification('Please fill all required fields with valid values', 'error');
+        return;
+    }
+
+    // Payment-specific validation (only positive)
+    if (currentPaymentType === 'payment' && amount <= 0) {
+        showNotification('Payment amount must be greater than 0', 'error');
+        return;
+    }
+
+    // Credit Note validation (any non-zero value)
+    if (currentPaymentType === 'credit-note' && amount === 0) {
+        showNotification('Credit Note amount cannot be zero', 'error');
+        return;
+    }
+
+    // If we're in edit mode, update instead of add new
+    if (currentlyEditingPaymentId) {
+        await updatePaymentRecord();
+        return;
+    }
+
+    const paymentData = { date, method, amount, notes };
+
+    try {
+        await savePaymentRecord(
+            currentPaymentCustomer.name,
+            currentPaymentCustomer.gstin,
+            paymentData,
+            currentPaymentType
+        );
+
+        // Clear form
+        resetPaymentForm();
+
+        // Reload list
+        loadPaymentsAndCreditNotesWithFilters();
+
+        // Show success message
+        const typeLabel = currentPaymentType === 'payment' ? 'Payment' : 'Credit Note';
+        showNotification(`${typeLabel} added successfully!`, 'success');
+
+    } catch (error) {
+        console.error('Error adding payment:', error);
+        showNotification('Error adding payment. Please try again.', 'error');
+    }
+}
+// Profit Calculation System - Complete Recalculation
+let missingPurchaseItems = [];
+let isProfitViewActive = false;
+let originalRates = new Map();
+
+// Toggle profit view
+function toggleProfitView() {
+    if (isProfitViewActive) {
+        restoreOriginalRates();
+    } else {
+        calculateProfit();
+    }
+}
+
+// Update the profit button in sidebar to use toggle:
+// Change: onclick="calculateProfit()" to onclick="toggleProfitView()"
+// Main profit calculation function
+async function calculateProfit() {
+    try {
+        // Get all items from current bill
+        const items = getCurrentBillItems();
+
+        if (items.length === 0) {
+            showNotification('No items in current bill to calculate profit');
+            return;
+        }
+
+        // Check for items with missing purchase prices
+        missingPurchaseItems = await findItemsWithMissingPurchasePrices(items);
+
+        if (missingPurchaseItems.length > 0) {
+            // Show dialog for missing purchase prices
+            showPurchasePriceDialog(missingPurchaseItems);
+        } else {
+            // All purchase prices available, calculate profit directly
+            applyProfitRecalculation(items);
+        }
+    } catch (error) {
+        console.error('Error calculating profit:', error);
+        showNotification('Error calculating profit. Please try again.');
+    }
+}
+
+// Get all items from current bill
+function getCurrentBillItems() {
+    const items = [];
+    const rows = document.querySelectorAll('#createListManual tbody tr[data-id]');
+
+    rows.forEach(row => {
+        const cells = row.children;
+        const particularsDiv = cells[1];
+        const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
+
+        if (itemName) {
+            const rate = parseFloat(cells[4].textContent) || 0;
+            const quantity = parseFloat(cells[2].textContent) || 0;
+            const amount = parseFloat(cells[5].textContent) || 0;
+
+            items.push({
+                id: row.getAttribute('data-id'),
+                itemName: itemName,
+                currentRate: rate,
+                quantity: quantity,
+                amount: amount,
+                row: row
+            });
+        }
+    });
+
+    return items;
+}
+
+// Find items with missing purchase prices
+async function findItemsWithMissingPurchasePrices(items) {
+    const missingItems = [];
+
+    for (const item of items) {
+        const savedItem = await getFromDB('savedItems', item.itemName);
+
+        if (!savedItem || !savedItem.purchaseRate || savedItem.purchaseRate <= 0) {
+            missingItems.push({
+                ...item,
+                purchaseRate: savedItem?.purchaseRate || 0
+            });
+        }
+    }
+
+    return missingItems;
+}
+
+// Show purchase price dialog
+function showPurchasePriceDialog(missingItems) {
+    const itemsList = document.getElementById('purchase-price-items-list');
+    itemsList.innerHTML = '';
+
+    missingItems.forEach(item => {
+        const itemElement = document.createElement('div');
+        itemElement.className = 'purchase-price-item';
+        itemElement.innerHTML = `
+            <div class="purchase-price-item-name">${item.itemName}</div>
+            <div class="current-rate">Selling: ₹${item.currentRate.toFixed(2)}</div>
+            <div class="purchase-price-input-group">
+                <label>Purchase:</label>
+                <input type="number" 
+                       class="purchase-price-input" 
+                       data-item-id="${item.id}"
+                       value="${item.purchaseRate || ''}" 
+                       placeholder="0.00" 
+                       step="0.01" 
+                       min="0">
+            </div>
+        `;
+        itemsList.appendChild(itemElement);
+    });
+
+    document.getElementById('purchase-price-dialog').classList.add('active');
+}
+
+// Close purchase price dialog
+function closePurchasePriceDialog() {
+    document.getElementById('purchase-price-dialog').classList.remove('active');
+    missingPurchaseItems = [];
+}
+
+// Store original rates for restoration
+function storeOriginalRates() {
+    originalRates.clear();
+    const rows = document.querySelectorAll('#createListManual tbody tr[data-id]');
+
+    rows.forEach(row => {
+        const itemId = row.getAttribute('data-id');
+        const currentRate = parseFloat(row.children[4].textContent) || 0;
+        originalRates.set(itemId, currentRate);
+    });
+}
+
+
+// Sync restore to other tables with error handling
+function syncRestoreToOtherTables(itemId, originalRate, originalAmount) {
+    try {
+        // Update copyListManual table
+        const copyRow = document.querySelector(`#copyListManual tr[data-id="${itemId}"]`);
+        if (copyRow) {
+            const cells = copyRow.children;
+            cells[4].textContent = originalRate.toFixed(2);
+            cells[5].textContent = originalAmount.toFixed(2);
+        }
+
+        // Update GST table if in GST mode
+        if (isGSTMode) {
+            const gstRow = document.querySelector(`#gstCopyListManual tr[data-id="${itemId}"]`);
+            if (gstRow) {
+                const cells = gstRow.children;
+                cells[5].textContent = originalRate.toFixed(2);
+                cells[6].textContent = originalAmount.toFixed(2);
+            }
+        }
+    } catch (error) {
+        console.error('Error syncing restore to other tables:', error);
+    }
+}
+
+// Detect and restore profit state after page refresh
+function restoreProfitStateAfterRefresh() {
+    const rows = document.querySelectorAll('#createListManual tbody tr[data-id]');
+    let needsRestoration = false;
+
+    // Check if any rows are in profit display mode (have profit HTML)
+    rows.forEach(row => {
+        const rateCell = row.children[4];
+        const amountCell = row.children[5];
+
+        // Check if cells contain profit display HTML instead of plain numbers
+        const hasProfitHTML = rateCell.innerHTML.includes('profit-rate-display') ||
+            rateCell.innerHTML.includes('profit-rate') ||
+            amountCell.innerHTML.includes('profit-amount-display') ||
+            amountCell.innerHTML.includes('profit-amount');
+
+        // Check if cells contain NaN or invalid values
+        const rateValue = parseFloat(rateCell.textContent);
+        const amountValue = parseFloat(amountCell.textContent);
+        const hasInvalidValues = isNaN(rateValue) || isNaN(amountValue);
+
+        if (hasProfitHTML || hasInvalidValues) {
+            needsRestoration = true;
+        }
+    });
+
+    // Also check the total amount display
+    const totalAmountElement = document.getElementById('createTotalAmountManual');
+    if (totalAmountElement && totalAmountElement.innerHTML.includes('profit-total-display')) {
+        needsRestoration = true;
+    }
+
+    if (needsRestoration) {
+        console.log('Page was refreshed while in profit view. Restoring normal state...');
+        const restoredCount = restoreOriginalRates();
+
+        // Show a subtle notification
+        if (restoredCount > 0) {
+            console.log(`Successfully restored ${restoredCount} items after page refresh`);
+        }
+    }
+
+    return needsRestoration;
+}
+
+// Enhanced restore function to handle both manual restore and page refresh
+function restoreOriginalRates() {
+    const rows = document.querySelectorAll('#createListManual tbody tr[data-id]');
+    let restoredCount = 0;
+
+    rows.forEach(row => {
+        const cells = row.children;
+
+        // Method 1: Try to get original rate from data attribute
+        let originalRate = parseFloat(row.getAttribute('data-original-rate'));
+
+        // Method 2: If no original rate, try to get from data-rate attribute
+        if (isNaN(originalRate) || originalRate <= 0) {
+            originalRate = parseFloat(row.getAttribute('data-rate'));
+        }
+
+        // Method 3: If still no rate, try to parse from cell content
+        if (isNaN(originalRate) || originalRate <= 0) {
+            const rateText = cells[4].textContent || cells[4].innerText;
+            originalRate = parseFloat(rateText.replace(/[^\d.]/g, ''));
+        }
+
+        // Method 4: If all methods fail, use a default safe value
+        if (isNaN(originalRate) || originalRate <= 0) {
+            originalRate = 1; // Safe default to avoid NaN
+        }
+
+        // Calculate final quantity and amount
+        const finalQuantity = getFinalQuantity(row);
+        const originalAmount = finalQuantity * originalRate;
+
+        // Restore simple numeric display
+        cells[4].textContent = originalRate.toFixed(2);
+        cells[5].textContent = originalAmount.toFixed(2);
+
+        // Ensure data attributes are correct and clean
+        row.setAttribute('data-rate', originalRate.toFixed(8));
+        row.setAttribute('data-amount', originalAmount.toFixed(8));
+
+        // Remove all profit-specific attributes
+        row.removeAttribute('data-profit-rate');
+        row.removeAttribute('data-profit-amount');
+        row.removeAttribute('data-purchase-rate');
+        row.removeAttribute('data-original-rate');
+
+        // Sync to other tables
+        syncRestoreToOtherTables(row.getAttribute('data-id'), originalRate, originalAmount);
+
+        restoredCount++;
+    });
+
+    // Restore original totals
+    updateTotal();
+
+    // Update UI state
+    isProfitViewActive = false;
+    updateProfitButtonState(false);
+
+    console.log(`Restored ${restoredCount} items from profit view`);
+    return restoredCount;
+}
+
+
+// Robust final quantity calculation
+function getFinalQuantity(row) {
+    try {
+        const dimensionType = row.getAttribute('data-dimension-type') || 'none';
+        const originalQuantity = parseFloat(row.getAttribute('data-original-quantity') || row.children[2].textContent) || 0;
+        let finalQuantity = originalQuantity;
+
+        if (dimensionType !== 'none' && dimensionType !== 'dozen') {
+            const dimensionValues = JSON.parse(row.getAttribute('data-dimension-values') || '[0,0,0]');
+            const calculatedArea = calculateAreaFromDimensions(dimensionType, dimensionValues);
+            finalQuantity = originalQuantity * (calculatedArea || 1);
+        } else if (dimensionType === 'dozen') {
+            finalQuantity = originalQuantity / 12;
+        }
+
+        return finalQuantity > 0 ? finalQuantity : 1; // Never return 0
+    } catch (error) {
+        console.error('Error calculating final quantity:', error);
+        return 1; // Safe fallback
+    }
+}
+// Update individual item with profit calculation
+function updateItemWithProfitCalculation(row, profitRate, purchaseRate, originalRate) {
+    const cells = row.children;
+    const finalQuantity = getFinalQuantity(row);
+
+    // Update rate cell to show profit
+    cells[4].innerHTML = `
+        <div class="profit-rate-display">
+            <div class="original-rate">₹${originalRate.toFixed(2)}</div>
+            <div class="profit-rate">Profit: ₹${profitRate.toFixed(2)}</div>
+            <div class="purchase-rate">Cost: ₹${purchaseRate.toFixed(2)}</div>
+        </div>
+    `;
+
+    // Calculate and update profit amount
+    const profitAmount = finalQuantity * profitRate;
+    cells[5].innerHTML = `
+        <div class="profit-amount-display">
+            <div class="profit-amount">₹${profitAmount.toFixed(2)}</div>
+            <div class="profit-label">Profit</div>
+        </div>
+    `;
+
+    // Update data attributes for profit mode
+    row.setAttribute('data-profit-rate', profitRate.toFixed(8));
+    row.setAttribute('data-profit-amount', profitAmount.toFixed(8));
+    row.setAttribute('data-original-rate', originalRate.toFixed(8));
+    row.setAttribute('data-purchase-rate', purchaseRate.toFixed(8));
+
+    // Sync to other tables
+    syncProfitUpdateToOtherTables(row.getAttribute('data-id'), profitRate, profitAmount, originalRate, purchaseRate);
+}
+
+// Update table totals with profit amounts
+function updateTableTotalsWithProfit() {
+    // Calculate total profit from all items
+    const rows = document.querySelectorAll('#createListManual tbody tr[data-id]');
+    let totalProfit = 0;
+
+    rows.forEach(row => {
+        const profitAmount = parseFloat(row.getAttribute('data-profit-amount') || 0);
+        totalProfit += profitAmount;
+    });
+
+    // Apply discount to profit if discount exists
+    let finalProfit = totalProfit;
+    if (discountPercent > 0) {
+        const discountAmount = totalProfit * (discountPercent / 100);
+        finalProfit = totalProfit - discountAmount;
+    }
+
+    // Update total display
+    const totalAmountElement = document.getElementById('createTotalAmountManual');
+    totalAmountElement.innerHTML = `
+        <div class="profit-total-display">
+            <div class="total-profit">₹${finalProfit.toFixed(2)}</div>
+            <div class="profit-total-label">Total Profit</div>
+            ${discountPercent > 0 ? `<div class="profit-discount">After ${discountPercent}% discount</div>` : ''}
+        </div>
+    `;
+
+    // Update copy table total
+    const copyTotalElement = document.getElementById('copyTotalAmount');
+    if (copyTotalElement) {
+        copyTotalElement.innerHTML = `
+            <div class="profit-total-display">
+                <div class="total-profit">₹${finalProfit.toFixed(2)}</div>
+                <div class="profit-total-label">Total Profit</div>
+            </div>
+        `;
+    }
+}
+
+// Update profit button state
+function updateProfitButtonState(isActive) {
+    const profitBtn = document.querySelector('.settings-btn[onclick="toggleProfitView()"]');
+    if (profitBtn) {
+        if (isActive) {
+            profitBtn.style.backgroundColor = '#27ae60';
+            profitBtn.innerHTML = '<span class="material-icons">show_chart</span>PROFIT VIEW ACTIVE';
+        } else {
+            profitBtn.style.backgroundColor = '';
+            profitBtn.innerHTML = '<span class="material-icons">calculate</span>PROFIT CALCULATION';
+        }
+    }
+}
+
+// Apply profit recalculation to all items
+async function applyProfitRecalculation(items, manualPurchasePrices = {}) {
+    try {
+        // Store original rates for restoration
+        storeOriginalRates();
+
+        let totalProfit = 0;
+        let updatedItems = 0;
+
+        for (const item of items) {
+            let purchaseRate = 0;
+
+            // Get purchase rate from manual input or saved item
+            if (manualPurchasePrices[item.id]) {
+                purchaseRate = manualPurchasePrices[item.id];
+            } else {
+                const savedItem = await getFromDB('savedItems', item.itemName);
+                purchaseRate = savedItem?.purchaseRate || 0;
+            }
+
+            if (purchaseRate > 0 && item.currentRate > purchaseRate) {
+                // Calculate profit rate (selling rate - purchase rate)
+                const profitRate = item.currentRate - purchaseRate;
+
+                // Update the item with profit calculation
+                updateItemWithProfitCalculation(item.row, profitRate, purchaseRate, item.currentRate);
+                totalProfit += profitRate * getFinalQuantity(item.row);
+                updatedItems++;
+            } else if (purchaseRate > 0) {
+                // No profit or loss
+                updateItemWithProfitCalculation(item.row, 0, purchaseRate, item.currentRate);
+            }
+        }
+
+        // Update table totals with profit amounts
+        updateTableTotalsWithProfit();
+
+        isProfitViewActive = true;
+
+        // Show summary
+        if (updatedItems > 0) {
+            const profitMessage = `Profit calculation applied to ${updatedItems} items.\nTotal Profit: ₹${totalProfit.toFixed(2)}`;
+            console.log(profitMessage);
+
+            // Update profit button to show it's active
+            updateProfitButtonState(true);
+        } else {
+            showNotification('No profit calculation applied. Check if purchase prices are set correctly.');
+        }
+
+    } catch (error) {
+        console.error('Error applying profit calculation:', error);
+        showNotification('Error applying profit calculation. Please try again.');
+    }
+}
+async function updateSavedItemsWithPurchasePrices(purchasePrices, items) {
+    // Add safety check for items
+    if (!items || !Array.isArray(items)) {
+        console.error('Invalid items array:', items);
+        return;
+    }
+
+    // Additional check for empty array
+    if (items.length === 0) {
+        console.warn('No items to update with purchase prices');
+        return;
+    }
+
+    for (const item of items) {
+        if (purchasePrices[item.id]) {
+            const savedItem = await getFromDB('savedItems', item.itemName);
+
+            if (savedItem) {
+                // Update existing item
+                savedItem.purchaseRate = parseFloat(purchasePrices[item.id]);
+                await setInDB('savedItems', item.itemName, savedItem);
+            } else {
+                // Create new saved item with purchase rate
+                const newItem = {
+                    name: item.itemName,
+                    purchaseRate: parseFloat(purchasePrices[item.id]),
+                    timestamp: Date.now()
+                };
+                await setInDB('savedItems', item.itemName, newItem);
+            }
+        }
+    }
+}
+async function applyProfitCalculation() {
+    try {
+        // Collect all purchase prices from the dialog
+        const purchasePriceInputs = document.querySelectorAll('.purchase-price-input');
+        const purchasePrices = {};
+
+        let allPricesValid = true;
+
+        purchasePriceInputs.forEach(input => {
+            const itemId = input.dataset.itemId;
+            const purchaseRate = parseFloat(input.value) || 0;
+
+            if (purchaseRate <= 0) {
+                allPricesValid = false;
+                input.style.borderColor = '#e74c3c';
+            } else {
+                purchasePrices[itemId] = purchaseRate;
+                input.style.borderColor = '';
+            }
+        });
+
+        if (!allPricesValid) {
+            showNotification('Please enter valid purchase prices for all items (greater than 0)');
+            return;
+        }
+
+        // === FIX: Get the items again to ensure they're available ===
+        const items = getCurrentBillItems();
+
+        if (!items || items.length === 0) {
+            showNotification('No items found to calculate profit');
+            return;
+        }
+
+        // Update saved items with purchase prices
+        await updateSavedItemsWithPurchasePrices(purchasePrices, items);
+
+        // Get all items and apply profit recalculation
+        applyProfitRecalculation(items, purchasePrices);
+
+        closePurchasePriceDialog();
+
+    } catch (error) {
+        console.error('Error applying profit calculation:', error);
+        showNotification('Error applying profit calculation. Please try again.');
+    }
+}
+
+// Apply profit calculation to all items
+async function applyProfitToAllItems(items, manualPurchasePrices = {}) {
+    let totalProfit = 0;
+    let updatedItems = 0;
+
+    for (const item of items) {
+        let purchaseRate = 0;
+
+        // Get purchase rate from manual input or saved item
+        if (manualPurchasePrices[item.id]) {
+            purchaseRate = manualPurchasePrices[item.id];
+        } else {
+            const savedItem = await getFromDB('savedItems', item.itemName);
+            purchaseRate = savedItem?.purchaseRate || 0;
+        }
+
+        if (purchaseRate > 0) {
+            // Calculate profit rate (selling rate - purchase rate)
+            const profitRate = item.currentRate - purchaseRate;
+
+            if (profitRate > 0) {
+                // Update the item rate with profit calculation
+                updateItemRateWithProfit(item.row, profitRate, purchaseRate);
+                totalProfit += profitRate * item.quantity;
+                updatedItems++;
+            }
+        }
+    }
+
+    // Show summary
+    if (updatedItems > 0) {
+        const profitMessage = `Profit calculation applied to ${updatedItems} items.\nTotal Profit: ₹${totalProfit.toFixed(2)}`;
+        console.log(profitMessage);
+
+        // Optional: Show success message
+        showNotification(profitMessage);
+    } else {
+        showNotification('No profit calculation applied. Check if purchase prices are set correctly.');
+    }
+}
+
+// Update individual item rate with profit calculation
+function updateItemRateWithProfit(row, profitRate, purchaseRate) {
+    const cells = row.children;
+    const currentRate = parseFloat(cells[4].textContent) || 0;
+
+    // Calculate new rate based on desired profit
+    const newRate = purchaseRate + profitRate;
+
+    // Update rate cell
+    cells[4].textContent = newRate.toFixed(2);
+
+    // Recalculate amount based on dimension type
+    const dimensionType = row.getAttribute('data-dimension-type') || 'none';
+    const originalQuantity = parseFloat(row.getAttribute('data-original-quantity') || cells[2].textContent);
+    let finalQuantity = originalQuantity;
+
+    if (dimensionType !== 'none' && dimensionType !== 'dozen') {
+        const dimensionValues = JSON.parse(row.getAttribute('data-dimension-values') || '[0,0,0]');
+        const calculatedArea = calculateAreaFromDimensions(dimensionType, dimensionValues);
+        finalQuantity = originalQuantity * calculatedArea;
+    } else if (dimensionType === 'dozen') {
+        finalQuantity = originalQuantity / 12;
+    }
+
+    // Update amount
+    const newAmount = finalQuantity * newRate;
+    cells[5].textContent = newAmount.toFixed(2);
+
+    // Update data attributes
+    row.setAttribute('data-rate', newRate.toFixed(8));
+    row.setAttribute('data-amount', newAmount.toFixed(8));
+
+    // Sync to other tables
+    syncProfitUpdateToOtherTables(row.getAttribute('data-id'), newRate, newAmount);
+}
+
+// Sync profit update to other tables
+function syncProfitUpdateToOtherTables(itemId, profitRate, profitAmount, originalRate, purchaseRate) {
+    // Update copyListManual table
+    const copyRow = document.querySelector(`#copyListManual tr[data-id="${itemId}"]`);
+    if (copyRow) {
+        const cells = copyRow.children;
+        cells[4].innerHTML = `
+            <div class="profit-rate-display">
+                <div class="original-rate">₹${originalRate.toFixed(2)}</div>
+                <div class="profit-rate">Profit: ₹${profitRate.toFixed(2)}</div>
+            </div>
+        `;
+        cells[5].innerHTML = `
+            <div class="profit-amount-display">
+                <div class="profit-amount">₹${profitAmount.toFixed(2)}</div>
+                <div class="profit-label">Profit</div>
+            </div>
+        `;
+    }
+
+    // Update GST table if in GST mode
+    if (isGSTMode) {
+        const gstRow = document.querySelector(`#gstCopyListManual tr[data-id="${itemId}"]`);
+        if (gstRow) {
+            const cells = gstRow.children;
+            cells[5].innerHTML = `
+                <div class="profit-rate-display">
+                    <div class="original-rate">₹${originalRate.toFixed(2)}</div>
+                    <div class="profit-rate">Profit: ₹${profitRate.toFixed(2)}</div>
+                </div>
+            `;
+            cells[6].innerHTML = `
+                <div class="profit-amount-display">
+                    <div class="profit-amount">₹${profitAmount.toFixed(2)}</div>
+                    <div class="profit-label">Profit</div>
+                </div>
+            `;
+        }
+    }
+}
+
+// Add event listeners for purchase price dialog
+document.addEventListener('DOMContentLoaded', function () {
+    // Close purchase price dialog
+    document.getElementById('close-purchase-dialog').addEventListener('click', closePurchasePriceDialog);
+
+    // Close dialog when clicking outside
+    document.getElementById('purchase-price-dialog').addEventListener('click', function (e) {
+        if (e.target === this) closePurchasePriceDialog();
+    });
+
+    // Validate purchase price inputs on change
+    document.addEventListener('input', function (e) {
+        if (e.target.classList.contains('purchase-price-input')) {
+            const value = parseFloat(e.target.value) || 0;
+            if (value > 0) {
+                e.target.style.borderColor = '';
+            }
+        }
+    });
+});
+
+function deleteCurrentTerms() {
+    if (window.currentEditingTermsDiv && confirm('Are you sure you want to delete these terms?')) {
+        window.currentEditingTermsDiv.remove();
+        closeTermsListModal();
+        // Save immediately after deletion
+        saveToLocalStorage();
+        showNotification('Terms deleted successfully', 'success');
+    }
+}
+
+function openTermsListModal() {
+    toggleSettingsSidebar();
+    // Reset editing state
+    window.currentEditingTermsDiv = null;
+
+    // Hide delete button for new terms
+    const deleteBtn = document.getElementById('delete-terms-btn');
+    if (deleteBtn) deleteBtn.style.display = 'none';
+
+    // Reset form
+    termsListItems = [];
+    termsListType = 'ul';
+    termsListStyle = 'disc';
+
+    document.getElementById('terms-heading').value = '';
+    document.getElementById('terms-list-type').value = 'ul';
+    updateListStyleOptions();
+    document.getElementById('terms-items-container').innerHTML = '';
+
+    // Set modal title for new terms
+    document.getElementById('section-modal-title').textContent = 'Create Terms & Conditions';
+    document.getElementById('save-section-btn').textContent = 'Add Terms';
+
+    // Add first empty item
+    addTermsListItem();
+
+    updateTermsPreview();
+    document.getElementById('terms-list-modal').style.display = 'block';
+}
+
+function closeTermsListModal() {
+    document.getElementById('terms-list-modal').style.display = 'none';
+    // Reset editing state
+    window.currentEditingTermsDiv = null;
+    // Hide delete button
+    const deleteBtn = document.getElementById('delete-terms-btn');
+    if (deleteBtn) deleteBtn.style.display = 'none';
+    // Reset modal title
+    document.getElementById('section-modal-title').textContent = 'Create Terms & Conditions';
+    document.getElementById('save-section-btn').textContent = 'Add Terms';
+}
+
+function handleListTypeChange() {
+    termsListType = document.getElementById('terms-list-type').value;
+    updateListStyleOptions();
+    updateTermsPreview();
+}
+
+function updateListStyleOptions() {
+    const styleSelect = document.getElementById('terms-list-style');
+    styleSelect.innerHTML = '';
+
+    const styles = termsListType === 'ul'
+        ? [
+            { value: 'disc', text: '● Disc' },
+            { value: 'circle', text: '○ Circle' },
+            { value: 'square', text: '■ Square' },
+            { value: 'none', text: 'None' }
+        ]
+        : [
+            { value: 'decimal', text: '1. Decimal' },
+            { value: 'decimal-leading-zero', text: '01. Decimal Zero' },
+            { value: 'lower-roman', text: 'i. Lower Roman' },
+            { value: 'upper-roman', text: 'I. Upper Roman' },
+            { value: 'lower-alpha', text: 'a. Lower Alpha' },
+            { value: 'upper-alpha', text: 'A. Upper Alpha' },
+            { value: 'none', text: 'None' }
+        ];
+
+    styles.forEach(style => {
+        const option = document.createElement('option');
+        option.value = style.value;
+        option.textContent = style.text;
+        styleSelect.appendChild(option);
+    });
+
+    styleSelect.value = termsListType === 'ul' ? 'disc' : 'decimal';
+    termsListStyle = styleSelect.value;
+}
+
+function editExistingTerms(termsDiv) {
+    // Store reference to the terms div being edited
+    window.currentEditingTermsDiv = termsDiv;
+
+    // Extract data from existing terms
+    const heading = termsDiv.querySelector('h4')?.textContent || '';
+    const listElement = termsDiv.querySelector('ul, ol');
+    const listType = listElement?.tagName.toLowerCase() || 'ul';
+    const listStyle = listElement?.style.listStyleType || (listType === 'ul' ? 'disc' : 'decimal');
+
+    // Extract list items
+    const listItems = Array.from(termsDiv.querySelectorAll('li')).map(li => li.textContent);
+
+    // Set modal title and show delete button
+    document.getElementById('section-modal-title').textContent = 'Edit Terms & Conditions';
+    document.getElementById('save-section-btn').textContent = 'Update Terms';
+
+    // Show delete button
+    const deleteBtn = document.getElementById('delete-terms-btn');
+    if (deleteBtn) deleteBtn.style.display = 'inline-block';
+
+    // Fill modal fields
+    document.getElementById('terms-heading').value = heading;
+    document.getElementById('terms-list-type').value = listType;
+
+    // Update list style options and set value
+    updateListStyleOptions();
+    document.getElementById('terms-list-style').value = listStyle;
+
+    // Clear and refill items container
+    const itemsContainer = document.getElementById('terms-items-container');
+    itemsContainer.innerHTML = '';
+    termsListItems = [];
+
+    listItems.forEach((itemText, index) => {
+        const itemId = 'terms-item-' + Date.now() + '-' + index;
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'terms-item';
+        itemDiv.innerHTML = `
+            <input type="text" 
+                   id="${itemId}" 
+                   value="${itemText}"
+                   placeholder="Enter list item text..." 
+                   oninput="updateTermsListItem('${itemId}', this.value)"
+                   onblur="updateTermsPreview()">
+            <button type="button" onclick="removeTermsListItem('${itemId}')" class="remove-terms-item">
+                <i class="material-icons">delete</i>
+            </button>
+        `;
+        itemsContainer.appendChild(itemDiv);
+        termsListItems.push({ id: itemId, text: itemText });
+    });
+
+    // If no items, add one empty
+    if (termsListItems.length === 0) {
+        addTermsListItem();
+    }
+
+    updateTermsPreview();
+    document.getElementById('terms-list-modal').style.display = 'block';
+}
+
+function addTermsListItem() {
+    const container = document.getElementById('terms-items-container');
+    const itemId = 'terms-item-' + Date.now();
+
+    const itemDiv = document.createElement('div');
+    itemDiv.className = 'terms-item';
+    itemDiv.innerHTML = `
+        <input type="text" 
+               id="${itemId}" 
+               placeholder="Enter list item text..." 
+               oninput="updateTermsListItem('${itemId}', this.value)"
+               onblur="updateTermsPreview()">
+        <button type="button" onclick="removeTermsListItem('${itemId}')" class="remove-terms-item">
+            <i class="material-icons">delete</i>
+        </button>
+    `;
+
+    container.appendChild(itemDiv);
+    termsListItems.push({ id: itemId, text: '' });
+
+    // Focus on the new input
+    setTimeout(() => document.getElementById(itemId).focus(), 100);
+}
+
+function removeTermsListItem(itemId) {
+    termsListItems = termsListItems.filter(item => item.id !== itemId);
+    document.querySelector(`#terms-items-container [id="${itemId}"]`).closest('.terms-item').remove();
+    updateTermsPreview();
+}
+
+function updateTermsListItem(itemId, text) {
+    const item = termsListItems.find(item => item.id === itemId);
+    if (item) {
+        item.text = text;
+    }
+}
+
+function updateTermsPreview() {
+    const preview = document.getElementById('terms-preview');
+    const heading = document.getElementById('terms-heading').value;
+    termsListStyle = document.getElementById('terms-list-style').value;
+
+    let previewHTML = '';
+
+    if (heading) {
+        previewHTML += `<h4>${heading}</h4>`;
+    }
+
+    // Only show list if there are items with text
+    const validItems = termsListItems.filter(item => item.text.trim());
+
+    if (validItems.length > 0) {
+        const listTag = termsListType;
+        previewHTML += `<${listTag} style="list-style-type: ${termsListStyle}">`;
+        validItems.forEach(item => {
+            previewHTML += `<li>${item.text}</li>`;
+        });
+        previewHTML += `</${listTag}>`;
+    } else {
+        previewHTML += '<p style="color: #666; font-style: italic;">No items to preview</p>';
+    }
+
+    preview.innerHTML = previewHTML;
+}
+
+function saveTermsList() {
+    const heading = document.getElementById('terms-heading').value.trim();
+    const validItems = termsListItems.filter(item => item.text.trim());
+
+    if (!heading) {
+        showNotification('Please enter a heading', 'error');
+        return;
+    }
+
+    if (validItems.length === 0) {
+        showNotification('Please add at least one list item', 'error');
+        return;
+    }
+
+    let listContainer;
+
+    if (window.currentEditingTermsDiv) {
+        // Editing existing terms - update the existing div
+        listContainer = window.currentEditingTermsDiv;
+    } else {
+        // Creating new terms - create new div
+        listContainer = document.createElement('div');
+        listContainer.className = 'bill-footer-list';
+        listContainer.setAttribute('data-editable', 'true');
+    }
+
+    let listHTML = `<h4>${heading}</h4>`;
+
+    const listTag = termsListType;
+    listHTML += `<${listTag} style="list-style-type: ${termsListStyle}">`;
+    validItems.forEach(item => {
+        listHTML += `<li>${item.text}</li>`;
+    });
+    listHTML += `</${listTag}>`;
+
+    listContainer.innerHTML = listHTML;
+
+    // Only insert if it's a new terms div
+    if (!window.currentEditingTermsDiv) {
+        const billTotalTable = document.getElementById('bill-total-table');
+        const gstBillTotalsTable = document.getElementById('gst-bill-totals-table');
+
+        if (billTotalTable && !isGSTMode) {
+            billTotalTable.parentNode.insertBefore(listContainer, billTotalTable.nextSibling);
+        } else if (gstBillTotalsTable && isGSTMode) {
+            gstBillTotalsTable.parentNode.insertBefore(listContainer, gstBillTotalsTable.nextSibling);
+        } else {
+            const listContainerParent = document.querySelector('.list-of-items');
+            if (listContainerParent) {
+                listContainerParent.appendChild(listContainer);
+            }
+        }
+    }
+
+    closeTermsListModal();
+    showNotification(window.currentEditingTermsDiv ? 'Terms updated successfully!' : 'Terms added successfully!', 'success');
+
+    // Save to localStorage to persist after refresh
+    saveToLocalStorage();
+}
