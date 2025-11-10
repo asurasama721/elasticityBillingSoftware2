@@ -5532,56 +5532,76 @@ async function loadTaxSettings() {
     }
 }
 
+// Enhanced Backup Function - Backs up entire database
 async function backupData() {
     try {
-        const currentBill = await getFromDB('billDataManual', 'currentBill');
-        const historyData = await getAllFromDB('billHistoryManual');
-        const taxSettings = await getFromDB('taxSettings', 'taxSettings');
-        const theme = await getFromDB('theme', 'currentTheme');
-        const savedItems = await getAllFromDB('savedItems');
-        const savedCustomers = await getAllFromDB('savedCustomers');
-        const savedBills = await getAllFromDB('savedBills');
-
-        // GST Data
-        const gstCustomers = await getAllFromDB('gstCustomers');
-        const gstSavedBills = await getAllFromDB('gstSavedBills');
-        const companyInfo = await getFromDB('companyInfo', 'companyInfo');
-        const gstMode = await getFromDB('gstMode', 'isGSTMode');
-
+        // Get all data from all object stores
         const backupData = {
-            currentBill: currentBill,
-            history: historyData,
-            taxSettings: taxSettings,
-            theme: theme,
-            savedItems: savedItems,
-            savedCustomers: savedCustomers,
-            savedBills: savedBills,
-            // GST Data
-            gstCustomers: gstCustomers,
-            gstSavedBills: gstSavedBills,
-            companyInfo: companyInfo,
-            gstMode: gstMode,
+            // Current bill data
+            billDataManual: await getAllFromDB('billDataManual'),
+            
+            // History data
+            billHistoryManual: await getAllFromDB('billHistoryManual'),
+            
+            // Settings data
+            taxSettings: await getAllFromDB('taxSettings'),
+            theme: await getAllFromDB('theme'),
+            settings: await getAllFromDB('settings'),
+            gstMode: await getAllFromDB('gstMode'),
+            
+            // Items and customers data
+            savedItems: await getAllFromDB('savedItems'),
+            savedCustomers: await getAllFromDB('savedCustomers'),
+            gstCustomers: await getAllFromDB('gstCustomers'),
+            
+            // Bills data
+            savedBills: await getAllFromDB('savedBills'),
+            gstSavedBills: await getAllFromDB('gstSavedBills'),
+            
+            // Company info
+            companyInfo: await getAllFromDB('companyInfo'),
+            
+            // Payment and credit note data
+            customerPayments: await getAllFromDB('customerPayments'),
+            customerCreditNotes: await getAllFromDB('customerCreditNotes'),
+            
+            // Metadata
             timestamp: new Date().toISOString(),
-            version: '2.0'
+            version: '3.0',
+            totalRecords: 0
         };
 
-        const dataStr = JSON.stringify(backupData);
+        // Calculate total records
+        backupData.totalRecords = Object.values(backupData).reduce((total, storeData) => {
+            if (Array.isArray(storeData)) {
+                return total + storeData.length;
+            } else if (storeData && typeof storeData === 'object') {
+                return total + 1;
+            }
+            return total;
+        }, 0);
+
+        const dataStr = JSON.stringify(backupData, null, 2);
         const dataBlob = new Blob([dataStr], { type: 'application/json' });
 
         const url = URL.createObjectURL(dataBlob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `bill-app-backup-${new Date().toISOString().split('T')[0]}.json`;
+        link.download = `bill-app-complete-backup-${new Date().toISOString().split('T')[0]}.json`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
 
+        showNotification(`Backup created successfully! (${backupData.totalRecords} records)`, 'success');
+
     } catch (error) {
         console.error('Error creating backup:', error);
+        showNotification('Error creating backup. Please try again.', 'error');
     }
 }
 
+// Enhanced Restore Function - Appends data and skips duplicates
 async function restoreData() {
     try {
         const input = document.createElement('input');
@@ -5597,93 +5617,35 @@ async function restoreData() {
                 try {
                     const backupData = JSON.parse(event.target.result);
 
-                    if (!backupData.currentBill || !backupData.history) {
-                        showNotification('Invalid backup file format');
+                    if (!backupData || !backupData.version) {
+                        showNotification('Invalid backup file format', 'error');
                         return;
                     }
 
-                    // Clear all existing data before restoring
-                    await clearAllData(true);
+                    const shouldProceed = await showConfirm(
+                        `This will restore ${backupData.totalRecords || 'unknown'} records. ` +
+                        'Existing data will be preserved and duplicates will be skipped. Continue?'
+                    );
 
-                    // Restore regular data
-                    await setInDB('billDataManual', 'currentBill', backupData.currentBill);
+                    if (!shouldProceed) return;
 
-                    for (const historyItem of backupData.history) {
-                        await setInDB('billHistoryManual', historyItem.id, historyItem.value);
-                    }
+                    showNotification('Starting restore process...', 'info');
 
-                    if (backupData.taxSettings) {
-                        await setInDB('taxSettings', 'taxSettings', backupData.taxSettings);
-                    }
+                    // Restore all stores with duplicate detection
+                    const results = await restoreAllStores(backupData);
 
-                    if (backupData.theme) {
-                        await setInDB('theme', 'currentTheme', backupData.theme);
-                    }
+                    // Show summary
+                    showNotification(
+                        `Restore completed! Added ${results.added} new records, skipped ${results.skipped} duplicates.`,
+                        'success'
+                    );
 
-                    if (backupData.savedItems) {
-                        for (const item of backupData.savedItems) {
-                            await setInDB('savedItems', item.id, item.value);
-                        }
-                    }
-
-                    if (backupData.savedCustomers) {
-                        for (const customer of backupData.savedCustomers) {
-                            await setInDB('savedCustomers', customer.id, customer.value);
-                        }
-                    }
-
-                    if (backupData.savedBills) {
-                        for (const bill of backupData.savedBills) {
-                            await setInDB('savedBills', bill.id, bill.value);
-                        }
-                    }
-
-                    // Restore GST Data
-                    if (backupData.gstCustomers) {
-                        for (const customer of backupData.gstCustomers) {
-                            await setInDB('gstCustomers', customer.id, customer.value);
-                        }
-                    }
-
-                    if (backupData.gstSavedBills) {
-                        for (const bill of backupData.gstSavedBills) {
-                            await setInDB('gstSavedBills', bill.id, bill.value);
-                        }
-                    }
-
-                    if (backupData.companyInfo) {
-                        await setInDB('companyInfo', 'companyInfo', backupData.companyInfo);
-                    }
-
-                    if (backupData.gstMode !== undefined) {
-                        await setInDB('gstMode', 'isGSTMode', backupData.gstMode);
-                    }
-
-
-                    // Reload all data
-                    await loadFromLocalStorage();
-                    await loadHistoryFromLocalStorage();
-                    await loadSavedTheme();
-                    await loadTaxSettings();
-                    // await loadSavedItems();
-                    await loadSavedCustomers();
-
-                    // Load GST data
-                    await loadCompanyInfo();
-                    await loadGSTCustomers();
-
-                    // Update GST mode
-                    const gstModeSetting = await getFromDB('gstMode', 'isGSTMode');
-                    isGSTMode = gstModeSetting || false;
-                    updateUIForGSTMode();
-
-                    saveStateToHistory();
-
-                    showNotification('Data restored successfully!');
+                    // Reload application data
+                    await reloadApplicationData();
 
                 } catch (error) {
                     console.error('Error parsing backup file:', error);
-                    showNotification('Error restoring backup file. Please make sure it\'s a valid backup file.');
+                    showNotification('Error restoring backup file. Please make sure it\'s a valid backup file.', 'error');
                 }
             };
             reader.readAsText(file);
@@ -5692,9 +5654,169 @@ async function restoreData() {
         input.click();
     } catch (error) {
         console.error('Error restoring data:', error);
-        showNotification('Error restoring data. Please try again.');
+        showNotification('Error restoring data. Please try again.', 'error');
     }
 }
+
+// Helper function to restore all stores with duplicate detection
+async function restoreAllStores(backupData) {
+    const results = {
+        added: 0,
+        skipped: 0,
+        errors: 0
+    };
+
+    // Restore array-based stores
+    const arrayStores = [
+        { store: 'savedItems', backupKey: 'savedItems', idKey: 'name' },
+        { store: 'savedCustomers', backupKey: 'savedCustomers', idKey: 'name' },
+        { store: 'gstCustomers', backupKey: 'gstCustomers', idKey: 'name' },
+        { store: 'savedBills', backupKey: 'savedBills', idKey: 'id' },
+        { store: 'gstSavedBills', backupKey: 'gstSavedBills', idKey: 'id' },
+        { store: 'customerPayments', backupKey: 'customerPayments', idKey: 'id' },
+        { store: 'customerCreditNotes', backupKey: 'customerCreditNotes', idKey: 'id' },
+        { store: 'billHistoryManual', backupKey: 'billHistoryManual', idKey: 'id' }
+    ];
+
+    for (const storeConfig of arrayStores) {
+        const storeResults = await restoreStore(storeConfig.store, backupData[storeConfig.backupKey], storeConfig.idKey);
+        results.added += storeResults.added;
+        results.skipped += storeResults.skipped;
+        results.errors += storeResults.errors;
+    }
+
+    // Restore single-value stores
+    await restoreSingleValueStore('taxSettings', backupData.taxSettings, 'taxSettings', results);
+    await restoreSingleValueStore('theme', backupData.theme, 'currentTheme', results);
+    await restoreSingleValueStore('gstMode', backupData.gstMode, 'isGSTMode', results);
+    await restoreSingleValueStore('companyInfo', backupData.companyInfo, 'companyInfo', results);
+    await restoreSingleValueStore('billDataManual', backupData.billDataManual, 'currentBill', results);
+    await restoreSingleValueStore('settings', backupData.settings, 'autoApplyCustomerRates', results);
+
+    return results;
+}
+
+// Restore a single store with duplicate detection
+async function restoreStore(storeName, backupItems, idKey) {
+    const results = { added: 0, skipped: 0, errors: 0 };
+
+    if (!backupItems || !Array.isArray(backupItems)) {
+        return results;
+    }
+
+    try {
+        // Get existing items for duplicate detection
+        const existingItems = await getAllFromDB(storeName);
+        const existingIds = new Set();
+        
+        // Build set of existing IDs
+        existingItems.forEach(item => {
+            if (item.value && item.value[idKey]) {
+                existingIds.add(item.value[idKey].toString().toLowerCase());
+            } else if (item.id) {
+                existingIds.add(item.id.toString().toLowerCase());
+            }
+        });
+
+        // Process each backup item
+        for (const backupItem of backupItems) {
+            try {
+                let itemData, itemId;
+
+                // Extract data based on backup format
+                if (backupItem.value && backupItem.value[idKey]) {
+                    itemData = backupItem.value;
+                    itemId = backupItem.value[idKey];
+                } else if (backupItem[idKey]) {
+                    itemData = backupItem;
+                    itemId = backupItem[idKey];
+                } else {
+                    itemData = backupItem.value || backupItem;
+                    itemId = backupItem.id;
+                }
+
+                if (!itemId) {
+                    results.skipped++;
+                    continue;
+                }
+
+                // Check for duplicate
+                const normalizedId = itemId.toString().toLowerCase();
+                if (existingIds.has(normalizedId)) {
+                    results.skipped++;
+                    continue;
+                }
+
+                // Save the item
+                await setInDB(storeName, itemId, itemData);
+                existingIds.add(normalizedId);
+                results.added++;
+
+            } catch (error) {
+                console.error(`Error restoring item in ${storeName}:`, error);
+                results.errors++;
+            }
+        }
+
+    } catch (error) {
+        console.error(`Error restoring store ${storeName}:`, error);
+        results.errors++;
+    }
+
+    return results;
+}
+
+// Restore single-value stores
+async function restoreSingleValueStore(storeName, backupData, key, results) {
+    if (!backupData) return;
+
+    try {
+        if (Array.isArray(backupData)) {
+            // Handle array format
+            for (const item of backupData) {
+                if (item.value !== undefined) {
+                    await setInDB(storeName, key, item.value);
+                    results.added++;
+                }
+            }
+        } else if (typeof backupData === 'object') {
+            // Handle object format - always overwrite single values
+            await setInDB(storeName, key, backupData);
+            results.added++;
+        }
+    } catch (error) {
+        console.error(`Error restoring ${storeName}:`, error);
+        results.errors++;
+    }
+}
+
+// Reload application data after restore
+async function reloadApplicationData() {
+    try {
+        await loadFromLocalStorage();
+        await loadHistoryFromLocalStorage();
+        await loadSavedTheme();
+        await loadTaxSettings();
+        await loadSavedCustomers();
+        await loadCompanyInfo();
+        await loadGSTCustomers();
+        
+        // Reload GST mode setting
+        const gstModeSetting = await getFromDB('gstMode', 'isGSTMode');
+        isGSTMode = gstModeSetting || false;
+        updateUIForGSTMode();
+
+        // Reload auto-apply setting
+        await loadAutoApplySetting();
+
+        saveStateToHistory();
+
+    } catch (error) {
+        console.error('Error reloading data after restore:', error);
+        showNotification('Error reloading some data after restore', 'warning');
+    }
+}
+
 function clearCustomerInputs() {
     // Clear Bill To inputs
     document.getElementById('consignee-name').value = '';
