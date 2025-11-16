@@ -714,7 +714,7 @@ let rateColumnHidden = false;
 let currentView = 'input';
 let showDimensions = true;
 
-const themes = ['blue', 'green', 'red', 'purple', 'orange', 'dark'];
+const themes = ['high-contrast', 'blue', 'green', 'red', 'purple', 'orange', 'dark', 'teal', 'indigo', 'brown', 'pink', 'cyan', 'lime', 'deep-purple', 'amber', 'deep-orange', 'blue-grey', 'navy', 'charcoal', 'burgundy', 'forest', 'slate', 'lavender', 'mint', 'peach', 'sage', 'rose-gold', 'nebula', 'cosmic', 'galaxy', 'stellar', 'asteroid', 'rainbow'];
 let currentThemeIndex = 0;
 
 
@@ -2047,25 +2047,51 @@ async function generateBatchInvoice() {
     }
 
     try {
-        // Parse input array
+        // Remove brackets and parse the input
         const cleanInput = input.replace(/[\[\]]/g, '');
-        const items = cleanInput.split(',').map(item => item.trim());
+        
+        // Parse the input handling quoted strings with commas
+        const items = [];
+        let currentItem = '';
+        let insideQuotes = false;
+        
+        for (let i = 0; i < cleanInput.length; i++) {
+            const char = cleanInput[i];
+            
+            if (char === '"') {
+                insideQuotes = !insideQuotes;
+                currentItem += char;
+            } else if (char === ',' && !insideQuotes) {
+                items.push(currentItem.trim());
+                currentItem = '';
+            } else {
+                currentItem += char;
+            }
+        }
+        
+        // Push the last item
+        if (currentItem.trim()) {
+            items.push(currentItem.trim());
+        }
 
-        if (items.length < 3) {
-            showNotification('Invalid format. Need at least 2 products + contact + customer name', 'error');
+        if (items.length < 4) {
+            showNotification('Invalid format. Need at least 2 products + contact + customer name + address', 'error');
             return;
         }
 
-        // Extract contact and customer name (last 2 elements)
-        const contactNumber = items[items.length - 2];
-        const customerName = items[items.length - 1];
-        const productItems = items.slice(0, items.length - 2);
+        // Extract components (last 3 elements: contact, name, address)
+        const address = items[items.length - 1].replace(/"/g, '').trim();
+        const customerName = items[items.length - 2].replace(/"/g, '').trim();
+        const contactNumber = items[items.length - 3].trim();
+        const productItems = items.slice(0, items.length - 3);
 
         // Fill customer details
         document.getElementById('custName').value = customerName;
         document.getElementById('custPhone').value = contactNumber;
+        document.getElementById('custAddr').value = address;
 
         // Process each product
+        let addedCount = 0;
         for (const item of productItems) {
             const [productCode, quantity] = item.split('@');
 
@@ -2075,10 +2101,11 @@ async function generateBatchInvoice() {
             }
 
             await addItemByProductCode(productCode.trim(), parseFloat(quantity.trim()));
+            addedCount++;
         }
 
         closeBatchInvoiceModal();
-        showNotification(`Added ${productItems.length} items for ${customerName}`, 'success');
+        showNotification(`Added ${addedCount} items for ${customerName}`, 'success');
 
     } catch (error) {
         console.error('Error generating batch invoice:', error);
@@ -3692,7 +3719,7 @@ function createTableRowManual(id, itemName, quantity, unit, rate, amount, notes,
             </div>
         `;
     } else {
-        actionsHtml = `<button onclick="${removeFn}" class="remove-btn"><span class="material-icons">close</span></button>`;
+        // actionsHtml = `<button onclick="${removeFn}" class="remove-btn"><span class="material-icons">close</span></button>`;
     }
 
     tr.innerHTML = `
@@ -5471,7 +5498,7 @@ function closeGSTModal() {
 
 // Add this NEW function to update GSTIN field visibility
 function updateGSTINVisibility() {
-    const customerGSTIN = document.getElementById('custGSTIN');
+    const customerGSTIN = document.getElementById('custGSINTd');
     const companyGSTIN = document.getElementById('companyGstin');
 
     if (gstPercent > 0) {
@@ -5776,6 +5803,12 @@ async function clearAllData(silent = false) {
     document.getElementById("custGSTIN").value = "";
 
     initializeDateInputs();
+    // Set current date in dd-mm-yyyy format
+    const now = new Date();
+    const day = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const year = now.getFullYear();
+    document.getElementById('billDate').value = `${day}-${month}-${year}`;
 
     const createListTbody = document.querySelector("#createListManual tbody");
     const copyListTbody = document.querySelector("#copyListManual tbody");
@@ -5894,6 +5927,15 @@ function changeTheme(theme) {
     const root = document.documentElement;
 
     switch (theme) {
+        case 'high-contrast':
+            root.style.setProperty('--primary-color', '#000000');
+            root.style.setProperty('--secondary-color', '#3b3b3bff');
+            root.style.setProperty('--text-color', '#000000');
+            root.style.setProperty('--bg-color', '#ffffff');
+            root.style.setProperty('--border-color', '#d4d4d4ff');
+            root.style.setProperty('--highlight-color', '#000000');
+            root.style.setProperty('--total-bg', '#cfcfcfff');
+            break;
         case 'blue':
             root.style.setProperty('--primary-color', '#3498db');
             root.style.setProperty('--secondary-color', '#2980b9');
@@ -5947,6 +5989,240 @@ function changeTheme(theme) {
             root.style.setProperty('--border-color', '#34495e');
             root.style.setProperty('--highlight-color', '#f1c40f');
             root.style.setProperty('--total-bg', '#e1e1e1');
+            break;
+        case 'teal':
+            root.style.setProperty('--primary-color', '#009688');
+            root.style.setProperty('--secondary-color', '#00796b');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#ff9800');
+            root.style.setProperty('--total-bg', '#e0f2f1');
+            break;
+        case 'indigo':
+            root.style.setProperty('--primary-color', '#3f51b5');
+            root.style.setProperty('--secondary-color', '#303f9f');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#ff4081');
+            root.style.setProperty('--total-bg', '#e8eaf6');
+            break;
+        case 'brown':
+            root.style.setProperty('--primary-color', '#795548');
+            root.style.setProperty('--secondary-color', '#5d4037');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#ff5722');
+            root.style.setProperty('--total-bg', '#efebe9');
+            break;
+        case 'pink':
+            root.style.setProperty('--primary-color', '#e91e63');
+            root.style.setProperty('--secondary-color', '#c2185b');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#00bcd4');
+            root.style.setProperty('--total-bg', '#fce4ec');
+            break;
+        case 'cyan':
+            root.style.setProperty('--primary-color', '#00bcd4');
+            root.style.setProperty('--secondary-color', '#0097a7');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#ff5722');
+            root.style.setProperty('--total-bg', '#e0f7fa');
+            break;
+        case 'lime':
+            root.style.setProperty('--primary-color', '#cddc39');
+            root.style.setProperty('--secondary-color', '#afb42b');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#ff5722');
+            root.style.setProperty('--total-bg', '#f9fbe7');
+            break;
+        case 'deep-purple':
+            root.style.setProperty('--primary-color', '#673ab7');
+            root.style.setProperty('--secondary-color', '#512da8');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#ff9800');
+            root.style.setProperty('--total-bg', '#ede7f6');
+            break;
+        case 'amber':
+            root.style.setProperty('--primary-color', '#ffc107');
+            root.style.setProperty('--secondary-color', '#ffa000');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#e91e63');
+            root.style.setProperty('--total-bg', '#fff8e1');
+            break;
+        case 'deep-orange':
+            root.style.setProperty('--primary-color', '#ff5722');
+            root.style.setProperty('--secondary-color', '#e64a19');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#2196f3');
+            root.style.setProperty('--total-bg', '#fbe9e7');
+            break;
+        case 'blue-grey':
+            root.style.setProperty('--primary-color', '#607d8b');
+            root.style.setProperty('--secondary-color', '#455a64');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#ff9800');
+            root.style.setProperty('--total-bg', '#eceff1');
+            break;
+        case 'navy':
+            root.style.setProperty('--primary-color', '#001f3f');
+            root.style.setProperty('--secondary-color', '#001a33');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#7fdbff');
+            root.style.setProperty('--total-bg', '#e6f2ff');
+            break;
+        case 'charcoal':
+            root.style.setProperty('--primary-color', '#36454f');
+            root.style.setProperty('--secondary-color', '#2c3e50');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#e74c3c');
+            root.style.setProperty('--total-bg', '#f8f9fa');
+            break;
+        case 'burgundy':
+            root.style.setProperty('--primary-color', '#800020');
+            root.style.setProperty('--secondary-color', '#660019');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#d4af37');
+            root.style.setProperty('--total-bg', '#f9f0f2');
+            break;
+        case 'forest':
+            root.style.setProperty('--primary-color', '#228b22');
+            root.style.setProperty('--secondary-color', '#1c6b1c');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#ffd700');
+            root.style.setProperty('--total-bg', '#f0f8f0');
+            break;
+        case 'slate':
+            root.style.setProperty('--primary-color', '#708090');
+            root.style.setProperty('--secondary-color', '#5a6672');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#ff6b6b');
+            root.style.setProperty('--total-bg', '#f8f9fa');
+            break;
+        case 'lavender':
+            root.style.setProperty('--primary-color', '#b57edc');
+            root.style.setProperty('--secondary-color', '#9b59b6');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#ffb6c1');
+            root.style.setProperty('--total-bg', '#f8f4ff');
+            break;
+        case 'mint':
+            root.style.setProperty('--primary-color', '#98fb98');
+            root.style.setProperty('--secondary-color', '#77dd77');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#ffb347');
+            root.style.setProperty('--total-bg', '#f0fff0');
+            break;
+        case 'peach':
+            root.style.setProperty('--primary-color', '#ffdab9');
+            root.style.setProperty('--secondary-color', '#f4a688');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#87ceeb');
+            root.style.setProperty('--total-bg', '#fff5ee');
+            break;
+        case 'sage':
+            root.style.setProperty('--primary-color', '#b2ac88');
+            root.style.setProperty('--secondary-color', '#9a9578');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#d4a574');
+            root.style.setProperty('--total-bg', '#f8f8f0');
+            break;
+        case 'rose-gold':
+            root.style.setProperty('--primary-color', '#e8b4b4');
+            root.style.setProperty('--secondary-color', '#d4a5a5');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#c9b037');
+            root.style.setProperty('--total-bg', '#fdf0f0');
+            break;
+        case 'nebula':
+            root.style.setProperty('--primary-color', '#4a235a');
+            root.style.setProperty('--secondary-color', '#2c125a');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#e74c3c');
+            root.style.setProperty('--total-bg', '#f5eef8');
+            break;
+        case 'cosmic':
+            root.style.setProperty('--primary-color', '#1a237e');
+            root.style.setProperty('--secondary-color', '#0d1452');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#ffab00');
+            root.style.setProperty('--total-bg', '#e8eaf6');
+            break;
+        case 'galaxy':
+            root.style.setProperty('--primary-color', '#311b92');
+            root.style.setProperty('--secondary-color', '#1a1267');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#00e5ff');
+            root.style.setProperty('--total-bg', '#ede7f6');
+            break;
+        case 'stellar':
+            root.style.setProperty('--primary-color', '#01579b');
+            root.style.setProperty('--secondary-color', '#002f6c');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#ffd600');
+            root.style.setProperty('--total-bg', '#e1f5fe');
+            break;
+        case 'asteroid':
+            root.style.setProperty('--primary-color', '#37474f');
+            root.style.setProperty('--secondary-color', '#263238');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#ff6e40');
+            root.style.setProperty('--total-bg', '#eceff1');
+            break;
+        case 'rainbow':
+            root.style.setProperty('--primary-color', '#ff0000');
+            root.style.setProperty('--secondary-color', '#ff7f00');
+            root.style.setProperty('--text-color', '#333');
+            root.style.setProperty('--bg-color', '#fff');
+            root.style.setProperty('--border-color', '#ddd');
+            root.style.setProperty('--highlight-color', '#4b0082');
+            root.style.setProperty('--total-bg', '#f0f8ff');
             break;
     }
     setInDB('theme', 'theme', theme);
@@ -6405,39 +6681,41 @@ function hideTableColumn(table, colIndex, displayStyle) {
     }
 }
 
-function toggleRateColumn() {
-    if (currentView === 'bill') {
-        showNotification('Switch to Input mode to toggle rate column', 'info');
-        return;
-    }
+//  REMOVE : function toggleRateColumn()
 
-    const tables = [
-        document.getElementById("createListManual"),
-        document.getElementById("copyListManual")
-    ];
+// function toggleRateColumn() {
+//     if (currentView === 'bill') {
+//         showNotification('Switch to Input mode to toggle rate column', 'info');
+//         return;
+//     }
 
-    rateColumnHidden = !rateColumnHidden;
-    const displayStyle = rateColumnHidden ? "none" : "table-cell";
+//     const tables = [
+//         document.getElementById("createListManual"),
+//         document.getElementById("copyListManual")
+//     ];
 
-    tables.forEach(table => {
-        if (table) {
-            hideTableColumn(table, 4, displayStyle);
-        }
-    });
+//     rateColumnHidden = !rateColumnHidden;
+//     const displayStyle = rateColumnHidden ? "none" : "table-cell";
 
-    // Also update GST table if in GST mode (shouldn't happen, but just in case)
-    if (isGSTMode) {
-        const gstTable = document.getElementById("gstCopyListManual");
-        if (gstTable) {
-            hideTableColumn(gstTable, 5, "table-cell"); // Always show in GST mode
-        }
-    }
+//     tables.forEach(table => {
+//         if (table) {
+//             hideTableColumn(table, 4, displayStyle);
+//         }
+//     });
 
-    const buttonIcon = document.querySelector('#tools button:nth-child(6) .material-icons');
-    if (buttonIcon) {
-        buttonIcon.textContent = rateColumnHidden ? "visibility" : "visibility_off";
-    }
-}
+//     // Also update GST table if in GST mode (shouldn't happen, but just in case)
+//     if (isGSTMode) {
+//         const gstTable = document.getElementById("gstCopyListManual");
+//         if (gstTable) {
+//             hideTableColumn(gstTable, 5, "table-cell"); // Always show in GST mode
+//         }
+//     }
+
+//     const buttonIcon = document.querySelector('#tools button:nth-child(6) .material-icons');
+//     if (buttonIcon) {
+//         buttonIcon.textContent = rateColumnHidden ? "visibility" : "visibility_off";
+//     }
+// }
 
 function autoSave() {
     saveToLocalStorage();
@@ -10964,3 +11242,135 @@ function saveTermsList() {
     // Save to localStorage to persist after refresh
     saveToLocalStorage();
 }
+
+function openColumnDialog() {
+    // Set checkboxes based on current column visibility
+    document.getElementById('colSrNo').checked = isColumnVisible(0);
+    document.getElementById('colQty').checked = isColumnVisible(2);
+    document.getElementById('colUnit').checked = isColumnVisible(3);
+    document.getElementById('colRate').checked = isColumnVisible(4);
+    document.getElementById('colAmt').checked = isColumnVisible(5);
+    document.getElementById('colTotal').checked = isTotalVisible();
+
+    document.getElementById('columnDialog').style.display = 'flex';
+}
+
+// Helper function to check if a column is currently visible
+function isColumnVisible(columnIndex) {
+    const table = document.getElementById('createListManual');
+    if (table) {
+        const headers = table.querySelectorAll('thead th');
+        if (headers[columnIndex]) {
+            return headers[columnIndex].style.display !== 'none';
+        }
+    }
+    return true; // Default to visible if not found
+}
+
+// Helper function to check if total section is visible
+function isTotalVisible() {
+    const totalSection = document.getElementById('bill-total-table');
+    return totalSection ? totalSection.style.display !== 'none' : true;
+}
+
+function closeColumnDialog() {
+    document.getElementById('columnDialog').style.display = 'none';
+}
+
+function applyColumnVisibility() {
+    const columns = {
+        'colSrNo': 0,  // Column index for SR NO
+        'colQty': 2,   // Column index for QTY
+        'colUnit': 3,  // Column index for UNIT
+        'colRate': 4,  // Column index for RATE
+        'colAmt': 5,   // Column index for AMT
+        'colTotal': 'total' // Special case for total table
+    };
+
+    // Tables to sync
+    const inputTable = document.getElementById('createListManual'); // Input table
+    const previewTable = document.getElementById('copyListManual'); // Preview table
+    const totalSection = document.getElementById('bill-total-table'); // Total table
+
+    // First, count visible columns to update section row colspan
+    let visibleColumnCount = 7; // Start with all columns (including Actions)
+
+    // Subtract hidden columns (excluding Actions column)
+    for (const [checkboxId, columnIndex] of Object.entries(columns)) {
+        if (columnIndex !== 'total' && columnIndex !== 6) { // Skip total and Actions
+            const isVisible = document.getElementById(checkboxId).checked;
+            if (!isVisible) {
+                visibleColumnCount--;
+            }
+        }
+    }
+
+    // Hide/show table columns based on checkboxes for BOTH tables
+    for (const [checkboxId, columnIndex] of Object.entries(columns)) {
+        const isVisible = document.getElementById(checkboxId).checked;
+
+        if (columnIndex === 'total') {
+            // Handle total table section
+            if (totalSection) {
+                totalSection.style.display = isVisible ? '' : 'none';
+            }
+        } else {
+            // Handle both input table and preview table
+            const tables = [inputTable, previewTable];
+
+            tables.forEach(table => {
+                if (table) {
+                    // Hide headers (skip Actions column for input table)
+                    const headers = table.querySelectorAll('thead th');
+                    if (headers[columnIndex] && columnIndex !== 6) { // Skip Actions column
+                        headers[columnIndex].style.display = isVisible ? '' : 'none';
+                    }
+
+                    // Hide cells in tbody (skip Actions column for input table)
+                    const rows = table.querySelectorAll('tbody tr');
+                    rows.forEach(row => {
+                        // Skip section rows when hiding regular columns
+                        if (!row.classList.contains('section-row')) {
+                            const cells = row.querySelectorAll('td');
+                            if (cells[columnIndex] && columnIndex !== 6) { // Skip Actions column
+                                cells[columnIndex].style.display = isVisible ? '' : 'none';
+                            }
+                        }
+                    });
+                }
+            });
+        }
+    }
+    // Add padding to Particulars column when SR NO is hidden
+    const srNoHidden = !document.getElementById('colSrNo').checked;
+    const particularsHeaders = document.querySelectorAll('thead th:nth-child(2)'); // Particulars header
+    const particularsCells = document.querySelectorAll('tbody td:nth-child(2)'); // Particulars cells
+
+    if (srNoHidden) {
+        // Add padding when SR NO is hidden
+        particularsHeaders.forEach(header => {
+            header.style.paddingLeft = '25px';
+        });
+        particularsCells.forEach(cell => {
+            cell.style.paddingLeft = '25px';
+        });
+    } else {
+        // Remove padding when SR NO is visible
+        particularsHeaders.forEach(header => {
+            header.style.paddingLeft = '';
+        });
+        particularsCells.forEach(cell => {
+            cell.style.paddingLeft = '';
+        });
+    }
+
+    // Update section row colspan to match visible column count
+    const sectionRows = document.querySelectorAll('.section-row');
+    sectionRows.forEach(row => {
+        row.querySelector('td').colSpan = visibleColumnCount;
+    });
+
+
+    closeColumnDialog();
+}
+
