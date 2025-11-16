@@ -1106,7 +1106,9 @@
         <button onclick="redoAction()"><span class="material-icons">redo</span>REDO</button>
         <button onclick="clearAllData()"><span class="material-icons">auto_delete</span>CLEAR ALL</button>
         <button onclick="downloadPDF()"><span class="material-icons">picture_as_pdf</span>PDF</button>
-        <button onclick="toggleRateColumn()"><span class="material-icons">visibility_off</span>RATE</button>
+        <button onclick="openColumnDialog()" style="display: inline-block;">
+            <span class="material-icons">visibility</span>COLUMNS
+        </button>
         <button onclick="openDiscountModal()"><span class="material-icons">percent</span>DISCOUNT</button>
         <button onclick="openGSTModal()" id="gst-tool-btn"><span class="material-icons">request_quote</span>GST</button>
         <button onclick="openSectionModal()"><span class="material-icons">view_day</span>SECTION</button>
@@ -1145,16 +1147,18 @@
                             Address: <input type="text" id="custAddr" oninput="saveToLocalStorage()" />
                         </td>
                         <td class="label">
-                            Contact no: <input type="text" id="custPhone" oninput="saveToLocalStorage()"
-                                pattern="[0-9]*" inputmode="numeric" />
+                            Date: <input type="text" id="billDate" oninput="saveToLocalStorage()" />
                         </td>
+
                     </tr>
                     <tr>
                         <td class="label">
-                            Date: <input type="text" id="billDate" oninput="saveToLocalStorage()" />
+                            Contact no: <input type="text" id="custPhone" oninput="saveToLocalStorage()"
+                                pattern="[0-9]*" inputmode="numeric" />
                         </td>
-                        <td class="label">
-                            GSTIN: <input type="text" id="custGSTIN" oninput="saveGSTIN()" style="display: none;">
+
+                        <td class="label" id="custGSINTd">
+                            GSTIN: <input type="text" id="custGSTIN" oninput="saveGSTIN()">
                         </td>
                     </tr>
                 </table>
@@ -1572,6 +1576,24 @@
                     <button onclick="closeBatchInvoiceModal()" class="btn-cancel">Cancel</button>
                     <button onclick="generateBatchInvoice()" class="btn-apply">Generate Invoice</button>
                 </div>
+            </div>
+        </div>
+    </div>
+    <!-- Column Visibility Dialog -->
+    <div id="columnDialog" class="dialog-overlay" style="display: none;">
+        <div class="dialog-content">
+            <h3>Show/Hide Columns</h3>
+            <div class="checkbox-group">
+                <label><input type="checkbox" id="colSrNo" checked> SR NO</label>
+                <label><input type="checkbox" id="colQty" checked> QTY</label>
+                <label><input type="checkbox" id="colUnit" checked> UNIT</label>
+                <label><input type="checkbox" id="colRate" checked> RATE</label>
+                <label><input type="checkbox" id="colAmt" checked> AMT</label>
+                <label><input type="checkbox" id="colTotal" checked> TOTAL TABLE</label>
+            </div>
+            <div class="dialog-buttons">
+                <button onclick="applyColumnVisibility()">Apply</button>
+                <button onclick="closeColumnDialog()">Cancel</button>
             </div>
         </div>
     </div>
