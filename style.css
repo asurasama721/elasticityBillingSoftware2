@@ -90,6 +90,10 @@ body.gst-mode #tools button:hover .material-icons {
 }
 
 #bill-container {
+    width: 100%;
+    max-width: 794px;
+    /* A4 width in pixels for screen display */
+    margin: 0 auto;
     overflow: hidden;
 }
 
@@ -1295,6 +1299,7 @@ body.gst-mode .settings-btn:hover .material-icons {
     }
 
     @media (max-width: 768px) {
+
         /* html {
             zoom: 0.76;
         } */
@@ -1691,6 +1696,60 @@ input:checked+.toggle-slider:before {
 
 .tax-info p {
     margin: 5px 0;
+}
+
+/* Column Dialog Styles */
+.dialog-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.dialog-content {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    min-width: 300px;
+}
+
+.checkbox-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 15px 0;
+}
+
+.checkbox-group label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.dialog-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.dialog-buttons button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.dialog-buttons button:first-child {
+    background: #007bff;
+    color: white;
 }
 
 /* PDF Page Break Improvements */
@@ -2605,7 +2664,7 @@ tr[data-id] .dimensions span[style*="color: red"] {
 /* 
  */
 
- .saved-bill-actions {
+.saved-bill-actions {
     display: flex;
     gap: 8px;
     margin-top: 10px;
@@ -2613,7 +2672,8 @@ tr[data-id] .dimensions span[style*="color: red"] {
     border-top: 1px solid #eee;
 }
 
-.btn-edit, .btn-delete {
+.btn-edit,
+.btn-delete {
     padding: 6px 12px;
     border: none;
     border-radius: 4px;
@@ -2667,6 +2727,7 @@ tr[data-id] .dimensions span[style*="color: red"] {
     border: 1px solid #ddd;
     border-radius: 4px;
 }
+
 #batch-invoice-input {
     width: 100%;
     padding: 10px;
