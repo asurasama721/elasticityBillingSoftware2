@@ -2,7 +2,7 @@
 let db = null;
 const DB_NAME = 'BillAppDB';
 
-const DB_VERSION = 5; // Changed from 4 to 5 to trigger upgrade
+const DB_VERSION = 6; // Changed from 5 to 6 to trigger upgrade
 let dbInitialized = false;
 let dbInitPromise = null;
 let isGSTMode = false;
@@ -122,6 +122,10 @@ function initDB() {
             // ADD THIS: Create settings object store
             if (!database.objectStoreNames.contains('settings')) {
                 database.createObjectStore('settings', { keyPath: 'id' });
+            }
+            // Add this with other object store creations
+            if (!database.objectStoreNames.contains('restoredBills')) {
+                database.createObjectStore('restoredBills', { keyPath: 'id' });
             }
         };
 
@@ -1003,6 +1007,12 @@ document.addEventListener('DOMContentLoaded', async function () {
             }
         });
 
+        // ADD THIS: Close restored bills modal
+        const closeRestoredBtn = document.querySelector('#restored-bills-modal .close');
+        if (closeRestoredBtn) {
+            closeRestoredBtn.addEventListener('click', closeRestoredBillsModal);
+        }
+
         // Item name input listener
         const itemNameManual = document.getElementById('itemNameManual');
         if (itemNameManual) {
@@ -1476,35 +1486,6 @@ function selectItemSuggestion(itemName) {
     // Trigger the existing item name input handler
     handleItemNameInput();
 }
-
-// async function loadSavedItems() {
-//     try {
-//         const items = await getAllFromDB('savedItems');
-
-//     } catch (error) {
-//         console.error('Error loading saved items:', error);
-//     }
-// }
-
-// Add this event listener for datalist selection
-// document.getElementById('itemNameManual').addEventListener('input', function () {
-//     const input = this.value;
-//     const datalist = document.getElementById('saved-items-list');
-//     const options = datalist.querySelectorAll('option');
-
-//     // Find if the input matches any option with data-original-name
-//     let originalName = null;
-//     options.forEach(option => {
-//         if (option.value === input && option.getAttribute('data-original-name')) {
-//             originalName = option.getAttribute('data-original-name');
-//         }
-//     });
-
-//     // If we found an original name, update the input to show it
-//     if (originalName && input !== originalName) {
-//         this.value = originalName;
-//     }
-// });
 
 async function handleItemNameInput() {
     const itemName = document.getElementById('itemNameManual').value.trim();
@@ -2804,6 +2785,9 @@ async function loadSavedBillsList() {
                     <div>Items: ${bill.value.items?.length || bill.value.itemCount || 0}</div>
                 </div>
                 <div class="saved-bill-actions">
+                    <button class="btn-download" onclick="downloadBillAsJson('${bill.id}', 'regular', event)">
+                        <i class="material-icons">download</i> Download
+                    </button>
                     <button class="btn-edit" onclick="editSavedBill('${bill.id}', 'regular', event)">
                         <i class="material-icons">edit</i> Edit
                     </button>
@@ -2813,14 +2797,11 @@ async function loadSavedBillsList() {
                 </div>
             `;
 
-            // FIX: Change loadGSTSavedBill to loadSavedBill for regular bills
             billCard.addEventListener('click', (e) => {
                 if (!e.target.closest('.saved-bill-actions')) {
-                    resetEditMode(); // Ensure edit mode is off
-                    loadSavedBill(bill.id); // FIXED: Use loadSavedBill instead of loadGSTSavedBill
+                    resetEditMode();
+                    loadSavedBill(bill.id);
                     closeSavedBillsModal();
-
-                    // Force refresh after a short delay to ensure DOM is updated
                     setTimeout(() => {
                         if (isGSTMode) {
                             copyItemsToGSTBill();
@@ -6733,6 +6714,7 @@ window.onclick = function (event) {
     const manageCustomersModal = document.getElementById('manage-customers-modal');
     const addCustomerModal = document.getElementById('add-customer-modal');
     const savedBillsModal = document.getElementById('saved-bills-modal');
+    const restoredBillsModal = document.getElementById('restored-bills-modal'); // ADD THIS
     const historyModal = document.getElementById('history-modal');
     const clearHistoryModal = document.getElementById('clear-history-modal');
     const batchInvoiceModal = document.getElementById('batch-invoice-modal');
@@ -6774,6 +6756,11 @@ window.onclick = function (event) {
     // ADD THIS: Handle section modal click
     if (event.target == sectionModal) {
         closeSectionModal();
+    }
+
+    // ADD THIS: Handle restored bills modal click
+    if (event.target == restoredBillsModal) {
+        closeRestoredBillsModal();
     }
 }
 
@@ -8227,11 +8214,14 @@ async function loadGSTSavedBillsList() {
                 <div class="saved-bill-details">
                     <div>Date: ${bill.value.date}</div>
                     <div>Customer: ${bill.value.customer?.billTo?.name || 'N/A'}</div>
-                   <div>Items: ${bill.value.items?.length || bill.value.itemCount || 0}</div>
+                    <div>Items: ${bill.value.items?.length || bill.value.itemCount || 0}</div>
                     <div>Type: ${bill.value.taxSettings?.transactionType || 'N/A'}</div>
                 </div>
                 <div class="saved-bill-actions">
-                  <button class="btn-edit" onclick="editSavedBill('${bill.id}', 'gst', event)">
+                    <button class="btn-download" onclick="downloadBillAsJson('${bill.id}', 'gst', event)">
+                        <i class="material-icons">download</i> Download
+                    </button>
+                    <button class="btn-edit" onclick="editSavedBill('${bill.id}', 'gst', event)">
                         <i class="material-icons">edit</i> Edit
                     </button>
                     <button class="btn-delete" onclick="deleteSavedBill('${bill.id}', 'gst', event)">
@@ -8240,26 +8230,16 @@ async function loadGSTSavedBillsList() {
                 </div>
             `;
 
-
-            // Regular click loads bill without edit mode
-            // Regular click loads bill without edit mode
             billCard.addEventListener('click', (e) => {
                 if (!e.target.closest('.saved-bill-actions')) {
-                    resetEditMode(); // Ensure edit mode is off
-
-                    // USE THE SAME LOADING LOGIC AS EDIT MODE BUT WITHOUT SETTING EDIT MODE
+                    resetEditMode();
                     loadGSTSavedBill(bill.id);
                     closeSavedBillsModal();
-
-                    // ADD THIS LINE: Save the loaded state
-                    saveToLocalStorage();
-
-                    // Force the same display updates that happen in edit mode
                     setTimeout(() => {
                         if (isGSTMode) {
                             copyItemsToGSTBill();
                             updateGSTTaxCalculation();
-                            updateGSTBillDisplay(); // Force refresh the display
+                            updateGSTBillDisplay();
                         }
                     }, 100);
                 }
@@ -8271,10 +8251,8 @@ async function loadGSTSavedBillsList() {
     } catch (error) {
         console.error('Error loading GST saved bills:', error);
     }
-    // Update column visibility after loading GST saved bill
     updateColumnVisibility();
     await saveToLocalStorage();
-
 }
 
 async function loadGSTSavedBill(billId) {
@@ -11667,4 +11645,330 @@ function calculateRegularBillTotal(bill) {
     const gstPercent = bill.taxSettings?.gstPercent || 0;
     const gstAmount = (subtotal - discountAmount) * (gstPercent / 100);
     return subtotal - discountAmount + gstAmount;
+}
+
+async function downloadBillAsJson(billId, billType, event) {
+    if (event) event.stopPropagation();
+
+    try {
+        console.group('=== BILL DOWNLOAD DEBUG ===');
+        console.log('Bill ID:', billId);
+        console.log('Bill Type:', billType);
+
+        const storeName = billType === 'gst' ? 'gstSavedBills' : 'savedBills';
+        console.log('Store Name:', storeName);
+
+        const bill = await getFromDB(storeName, billId);
+        console.log('Retrieved Bill Object:', bill);
+
+        if (!bill) {
+            console.error('❌ Bill is null/undefined');
+            showNotification('Bill not found in database', 'error');
+            console.groupEnd();
+            return;
+        }
+
+        // FIX: Check if bill has value property or use bill directly
+        const billData = bill.value || bill;
+        console.log('Bill data to download:', billData);
+
+        if (!billData) {
+            console.error('❌ Bill data is missing');
+            showNotification('Bill data structure is invalid', 'error');
+            console.groupEnd();
+            return;
+        }
+
+        console.log('✅ Bill looks valid, proceeding with download...');
+
+        // Simple download without validation
+        const downloadData = billData;
+        const dataStr = JSON.stringify(downloadData, null, 2);
+
+        const filename = `bill_${billId}.json`;
+        const dataBlob = new Blob([dataStr], { type: 'application/json' });
+        const url = URL.createObjectURL(dataBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+
+        console.log('✅ Download completed successfully');
+        showNotification('Bill downloaded!', 'success');
+        console.groupEnd();
+
+    } catch (error) {
+        console.error('❌ Download failed:', error);
+        showNotification('Download error: ' + error.message, 'error');
+        console.groupEnd();
+    }
+}
+
+// Open Restored Bills Modal
+function openRestoredBillsModal() {
+    document.getElementById('restored-bills-modal').style.display = 'block';
+    loadRestoredBillsList();
+    toggleSettingsSidebar();
+}
+
+// Close Restored Bills Modal
+function closeRestoredBillsModal() {
+    document.getElementById('restored-bills-modal').style.display = 'none';
+}
+
+// Load Restored Bills List
+async function loadRestoredBillsList() {
+    try {
+        const restoredBills = await getAllFromDB('restoredBills');
+        const billsList = document.getElementById('restored-bills-list');
+        billsList.innerHTML = '';
+
+        if (restoredBills.length === 0) {
+            billsList.innerHTML = '<div class="saved-bill-card">No restored bills yet. Use "Restore Bill from JSON" to add bills.</div>';
+            return;
+        }
+
+        // Sort by timestamp (newest first)
+        restoredBills.sort((a, b) => b.value.timestamp - a.value.timestamp);
+
+        restoredBills.forEach(bill => {
+            const billCard = createRestoredBillCard(bill);
+            billsList.appendChild(billCard);
+        });
+    } catch (error) {
+        console.error('Error loading restored bills:', error);
+        billsList.innerHTML = '<div class="saved-bill-card">Error loading restored bills</div>';
+    }
+}
+
+// Create Restored Bill Card
+function createRestoredBillCard(bill) {
+    const billCard = document.createElement('div');
+    billCard.className = 'saved-bill-card';
+
+    // FIX: Handle missing sourceType by detecting from bill structure
+    const sourceType = bill.value?.sourceType || (bill.value?.invoiceDetails ? 'gst' : 'regular');
+    const isGST = sourceType === 'gst';
+    const billNo = isGST ? bill.value?.invoiceDetails?.number : bill.value?.customer?.billNo;
+    const customerName = isGST ? bill.value?.customer?.billTo?.name : bill.value?.customer?.name;
+    const date = isGST ? bill.value?.invoiceDetails?.date : bill.value?.customer?.date;
+    const totalAmount = bill.value?.totalAmount || '0.00';
+    const itemCount = bill.value?.itemCount || bill.value?.items?.length || bill.value?.tableStructure?.filter(item => item.type === 'item').length || 0;
+
+    billCard.innerHTML = `
+        <div class="saved-bill-header">
+            <div class="saved-bill-title">${customerName || 'Unknown Customer'} - ${billNo || 'No Number'}</div>
+            <div class="saved-bill-total">₹${totalAmount}</div>
+        </div>
+        <div class="saved-bill-details">
+            <div>Date: ${date || 'Unknown'}</div>
+            <div>Customer: ${customerName || 'Unknown'}</div>
+            <div>Items: ${itemCount}</div>
+            <div>Type: ${isGST ? 'GST' : 'Regular'} • Restored</div>
+        </div>
+        <div class="saved-bill-actions">
+            <button class="btn-download" onclick="downloadBillAsJson('${bill.id}', '${sourceType}', event)">
+                <i class="material-icons">download</i> Download
+            </button>
+            <button class="btn-load" onclick="loadRestoredBill('${bill.id}', event)">
+                <i class="material-icons">open_in_browser</i> Load
+            </button>
+            <!-- REMOVED: Save to Bills button -->
+            <button class="btn-delete" onclick="deleteRestoredBill('${bill.id}', event)">
+                <i class="material-icons">delete</i> Delete
+            </button>
+        </div>
+    `;
+
+    return billCard;
+}
+
+async function restoreIndividualBill() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+            try {
+                const billData = JSON.parse(event.target.result);
+
+                // Validate it's a bill file
+                if (!billData.customer && !billData.invoiceDetails) {
+                    showNotification('Invalid bill file format', 'error');
+                    return;
+                }
+
+                // FIX: Determine source type based on bill structure
+                const sourceType = billData.invoiceDetails ? 'gst' : 'regular';
+
+                // Add to restored bills
+                const restoredBillId = `restored-bill-${Date.now()}`;
+                const restoredData = {
+                    ...billData,
+                    id: restoredBillId,
+                    sourceType: sourceType, // ADD THIS LINE
+                    timestamp: Date.now(),
+                    isRestored: true
+                };
+
+                await setInDB('restoredBills', restoredBillId, restoredData);
+
+                showNotification('Bill restored successfully!', 'success');
+
+                // Refresh restored bills list
+                await loadRestoredBillsList();
+
+            } catch (error) {
+                console.error('Error restoring bill:', error);
+                showNotification('Error restoring bill file. Please make sure it\'s a valid bill JSON file.', 'error');
+            }
+        };
+        reader.readAsText(file);
+    };
+
+    input.click();
+}
+
+// Load Restored Bill - SIMPLE APPROACH (WORKING)
+async function loadRestoredBill(billId, event) {
+    if (event) event.stopPropagation();
+
+    try {
+        // Get the restored bill
+        const restoredBill = await getFromDB('restoredBills', billId);
+        if (!restoredBill) {
+            showNotification('Restored bill not found', 'error');
+            return;
+        }
+
+        // Convert restored bill to same format as saved bills
+        const billData = {
+            tableStructure: restoredBill.tableStructure || [],
+            company: restoredBill.company || {},
+            customer: restoredBill.customer || {},
+            taxSettings: restoredBill.taxSettings || {},
+            termsData: restoredBill.termsData || [],
+            gstCustomerData: restoredBill.gstCustomerData || {},
+            title: restoredBill.title || '',
+            totalAmount: restoredBill.totalAmount || '0.00',
+            timestamp: restoredBill.timestamp || Date.now(),
+            date: restoredBill.date || '',
+            itemCount: restoredBill.itemCount || 0
+        };
+
+        // Clear workspace
+        await clearAllData(true);
+
+        // Set as current bill
+        await setInDB('billDataManual', 'currentBill', billData);
+
+        // Load using your existing function
+        await loadFromLocalStorage();
+        saveStateToHistory();
+
+        closeRestoredBillsModal();
+        showNotification('Restored bill loaded successfully!', 'success');
+
+    } catch (error) {
+        console.error('Error loading restored bill:', error);
+        showNotification('Error loading restored bill', 'error');
+    }
+}
+
+// Delete Restored Bill
+async function deleteRestoredBill(billId, event) {
+    if (event) event.stopPropagation();
+
+    const shouldDelete = await showConfirm('Are you sure you want to delete this restored bill?');
+    if (shouldDelete) {
+        try {
+            await removeFromDB('restoredBills', billId);
+            await loadRestoredBillsList();
+            showNotification('Restored bill deleted successfully', 'success');
+        } catch (error) {
+            console.error('Error deleting restored bill:', error);
+            showNotification('Error deleting restored bill', 'error');
+        }
+    }
+}
+
+// Search Restored Bills
+function searchRestoredBills() {
+    const searchTerm = document.getElementById('restored-bills-search').value.toLowerCase();
+    const billCards = document.querySelectorAll('#restored-bills-list .saved-bill-card');
+
+    billCards.forEach(card => {
+        const billTitle = card.querySelector('.saved-bill-title').textContent.toLowerCase();
+        const billDetails = card.querySelector('.saved-bill-details').textContent.toLowerCase();
+
+        if (billTitle.includes(searchTerm) || billDetails.includes(searchTerm)) {
+            card.style.display = 'block';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+}
+
+// Load Regular Restored Bill
+async function loadRegularRestoredBill(billId) {
+    try {
+        const bill = await getFromDB('restoredBills', billId);
+        if (!bill) return;
+
+        // Use the same logic as loadSavedBill
+        await setInDB('billDataManual', 'currentBill', bill.value);
+        await loadFromLocalStorage();
+        saveStateToHistory();
+
+        if (currentView === 'bill') {
+            toggleView();
+        }
+
+        console.log('Regular restored bill loaded successfully');
+
+    } catch (error) {
+        console.error('Error loading regular restored bill:', error);
+        throw error;
+    }
+}
+
+// Load GST Restored Bill
+async function loadGSTRestoredBill(billId) {
+    try {
+        const bill = await getFromDB('restoredBills', billId);
+        if (!bill) return;
+
+        // Use the same logic as loadGSTSavedBill
+        await setInDB('billDataManual', 'currentBill', bill.value);
+        await loadFromLocalStorage();
+        saveStateToHistory();
+
+        // Ensure GST mode is active
+        if (!isGSTMode) {
+            isGSTMode = true;
+            await setInDB('gstMode', 'isGSTMode', true);
+            updateUIForGSTMode();
+        }
+
+        // Update GST display
+        if (isGSTMode) {
+            copyItemsToGSTBill();
+            updateGSTTaxCalculation();
+            updateGSTBillDisplay();
+        }
+
+        console.log('GST restored bill loaded successfully');
+
+    } catch (error) {
+        console.error('Error loading GST restored bill:', error);
+        throw error;
+    }
 }
