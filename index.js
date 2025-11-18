@@ -1008,6 +1008,8 @@ document.addEventListener('DOMContentLoaded', async function () {
         if (itemNameManual) {
             itemNameManual.addEventListener('input', handleItemNameInput);
         }
+        // Load custom payment methods on startup
+        await loadCustomPaymentMethods();
 
         // Add this to your DOMContentLoaded function
         await loadAutoApplySetting();
@@ -2049,15 +2051,15 @@ async function generateBatchInvoice() {
     try {
         // Remove brackets and parse the input
         const cleanInput = input.replace(/[\[\]]/g, '');
-        
+
         // Parse the input handling quoted strings with commas
         const items = [];
         let currentItem = '';
         let insideQuotes = false;
-        
+
         for (let i = 0; i < cleanInput.length; i++) {
             const char = cleanInput[i];
-            
+
             if (char === '"') {
                 insideQuotes = !insideQuotes;
                 currentItem += char;
@@ -2068,7 +2070,7 @@ async function generateBatchInvoice() {
                 currentItem += char;
             }
         }
-        
+
         // Push the last item
         if (currentItem.trim()) {
             items.push(currentItem.trim());
@@ -9570,6 +9572,10 @@ function resetPaymentForm() {
     document.getElementById('payment-amount').value = '';
     document.getElementById('payment-notes').value = '';
 
+    // Clear custom method input and hide container
+    document.getElementById('custom-payment-method').value = '';
+    document.getElementById('custom-method-container').style.display = 'none';
+
     // Reset UI to add mode
     document.getElementById('add-payment-btn').innerHTML = '<i class="material-icons">add</i> Add <span id="add-btn-label">Payment</span>';
 
@@ -9582,13 +9588,27 @@ async function updatePaymentRecord() {
         return;
     }
 
+    // Handle payment method (including custom methods)
+    const methodSelect = document.getElementById('payment-method');
+    let finalMethod = methodSelect.value;
+
+    if (finalMethod === 'Other') {
+        const customMethod = document.getElementById('custom-payment-method').value.trim();
+        if (!customMethod) {
+            showNotification('Please enter custom payment method name');
+            return;
+        }
+        finalMethod = customMethod;
+        await saveCustomPaymentMethod(customMethod);
+        await loadCustomPaymentMethods(); // Refresh dropdown
+    }
+
     const date = document.getElementById('payment-date').value;
-    const method = document.getElementById('payment-method').value;
     const amount = parseFloat(document.getElementById('payment-amount').value);
     const notes = document.getElementById('payment-notes').value;
 
     // Different validation for Payments vs Credit Notes
-    if (!date || !method || isNaN(amount)) {
+    if (!date || !finalMethod || isNaN(amount)) {
         showNotification('Please fill all required fields with valid values', 'error');
         return;
     }
@@ -9620,7 +9640,7 @@ async function updatePaymentRecord() {
         const updatedRecord = {
             ...existingRecord,
             date: date,
-            method: method,
+            method: finalMethod, // Use the final method (could be custom)
             amount: amount,
             notes: notes,
             updatedAt: Date.now()
@@ -9692,32 +9712,7 @@ function displayPayments(payments) {
         tbody.appendChild(row);
     });
 }
-function displayCustomerSummary(summary) {
-    const summaryContent = document.getElementById('customer-summary-content');
-    if (!summaryContent) return;
 
-    // FIX: Safe date formatting
-    let dateRangeText = 'All Dates';
-    if (summary.dateRange) {
-        dateRangeText = summary.dateRange;
-    }
-
-    summaryContent.innerHTML = `
-        <div class="summary-item"><strong>Customer Name:</strong> ${summary.customerName || 'Unknown'}</div>
-        <div class="summary-item"><strong>GSTIN:</strong> ${summary.gstin || 'Not provided'}</div>
-        <div class="summary-item"><strong>Total Bills:</strong> ${summary.totalBills || 0}</div>
-        <div class="summary-item"><strong>Total Payments:</strong> ${summary.totalPayments || 0}</div>
-        <div class="summary-item"><strong>Total Credit Notes:</strong> ${summary.totalCreditNotes || 0}</div>
-        <div class="summary-item"><strong>Total Sub Total:</strong> ₹${(summary.subTotal || 0).toFixed(2)}</div>
-        <div class="summary-item"><strong>Total Discount:</strong> ₹${(summary.discount || 0).toFixed(2)}</div>
-        <div class="summary-item"><strong>Total Grand Total:</strong> ₹${(summary.grandTotal || 0).toFixed(2)}</div>
-        <div class="summary-item"><strong>Total Payments Amount:</strong> ₹${(summary.paymentTotal || 0).toFixed(2)}</div>
-        <div class="summary-item"><strong>Total CN:</strong> ₹${(summary.creditNoteTotal || 0).toFixed(2)}</div>
-        <div class="summary-item"><strong>Balance:</strong> ₹${(summary.balance || 0).toFixed(2)}</div>
-        <div class="summary-item"><strong>Advance Payment:</strong> ₹${(summary.advancePayment || 0).toFixed(2)}</div>
-        <div class="summary-item"><strong>Date Range:</strong> ${dateRangeText}</div>
-    `;
-}
 // View bill from ledger
 async function viewBill(billId, source) {
     if (source === 'gst') {
@@ -9731,114 +9726,6 @@ async function viewBill(billId, source) {
     if (currentView !== 'bill') {
         toggleView();
     }
-}
-
-// Display bills table
-function displayBillsTable(bills) {
-    const tbody = document.getElementById('bills-tbody');
-    tbody.innerHTML = '';
-
-    let subTotalSum = 0;
-    let discountSum = 0;
-    let grandTotalSum = 0;
-
-    bills.forEach(bill => {
-        let invoiceNo, date, subTotal, discount, grandTotal;
-
-        if (bill.source === 'gst') {
-            invoiceNo = bill.invoiceDetails?.number || 'N/A';
-            date = bill.invoiceDetails?.date || bill.date || 'N/A';
-            subTotal = parseFloat(bill.totals?.subtotal || 0);
-            discount = parseFloat(bill.totals?.discount || 0);
-            grandTotal = parseFloat(bill.totals?.grandTotal || 0);
-        } else {
-            invoiceNo = bill.customer?.billNo || 'N/A';
-            date = bill.invoiceDetails?.date || bill.date || 'N/A';
-            // Convert yyyy-mm-dd to dd-mm-yyyy for display
-            if (date && date.includes('-') && date.length === 10) {
-                const parts = date.split('-');
-                if (parts[0].length === 4) {
-                    date = `${parts[2]}-${parts[1]}-${parts[0]}`; // dd-mm-yyyy
-                }
-            }
-            const totalAmount = parseFloat(bill.totalAmount || 0);
-            const discountPercent = bill.taxSettings?.discountPercent || 0;
-            discount = totalAmount * (discountPercent / 100);
-            const gstPercent = bill.taxSettings?.gstPercent || 0;
-            const gstAmount = (totalAmount - discount) * (gstPercent / 100);
-            subTotal = totalAmount;
-            grandTotal = totalAmount - discount + gstAmount;
-        }
-
-        subTotalSum += subTotal;
-        discountSum += discount;
-        grandTotalSum += grandTotal;
-
-        const row = document.createElement('tr');
-        row.innerHTML = `
-            <td>${invoiceNo}</td>
-            <td>${convertToDisplayFormat(date)}</td> <!-- FIXED: Use date variable instead of payment.date -->
-            <td>₹${subTotal.toFixed(2)}</td>
-            <td>₹${discount.toFixed(2)}</td>
-            <td>₹${grandTotal.toFixed(2)}</td>
-            <td>
-                <button class="view-bill-btn" onclick="viewBill('${bill.id}', '${bill.source}')">
-                    <i class="material-icons">visibility</i> View
-                </button>
-            </td>
-        `;
-        tbody.appendChild(row);
-    });
-
-    // Update totals
-    document.getElementById('bills-subtotal-total').textContent = `₹${subTotalSum.toFixed(2)}`;
-    document.getElementById('bills-discount-total').textContent = `₹${discountSum.toFixed(2)}`;
-    document.getElementById('bills-grandtotal-total').textContent = `₹${grandTotalSum.toFixed(2)}`;
-}
-
-// Display payments table
-function displayPaymentsTable(payments) {
-    const tbody = document.getElementById('payments-ledger-tbody');
-    tbody.innerHTML = '';
-
-    let total = 0;
-
-    payments.forEach(payment => {
-        total += parseFloat(payment.amount);
-
-        const row = document.createElement('tr');
-        row.innerHTML = `
-            <td>${formatDateForDisplay(payment.date)}</td>
-            <td>${payment.method}</td>
-            <td>₹${parseFloat(payment.amount).toFixed(2)}</td>
-            <td>${payment.notes || ''}</td>
-        `;
-        tbody.appendChild(row);
-    });
-
-    document.getElementById('payments-total').textContent = `₹${total.toFixed(2)}`;
-}
-// Display credit notes table
-function displayCreditNotesTable(creditNotes) {
-    const tbody = document.getElementById('creditnotes-tbody');
-    tbody.innerHTML = '';
-
-    let total = 0;
-
-    creditNotes.forEach(creditNote => {
-        total += parseFloat(creditNote.amount);
-
-        const row = document.createElement('tr');
-        row.innerHTML = `
-            <td>${convertToDisplayFormat(creditNote.date)}</td> <!-- FIXED: Use creditNote.date instead of payment.date -->
-            <td>${creditNote.method}</td>
-            <td>₹${parseFloat(creditNote.amount).toFixed(2)}</td>
-            <td>${creditNote.notes || ''}</td>
-        `;
-        tbody.appendChild(row);
-    });
-
-    document.getElementById('creditnotes-total').textContent = `₹${total.toFixed(2)}`;
 }
 function convertToDisplayFormat(dateStr) {
     console.log(dateStr);
@@ -9938,45 +9825,6 @@ function getDateRangeForPeriod() {
     };
 }
 
-async function loadLedgerData(customerName, gstin) {
-    console.log('Loading ledger data for:', customerName, gstin); // Debug log
-
-    // FIX: Better parameter handling
-    if (!customerName) {
-        if (currentPaymentCustomer && currentPaymentCustomer.name) {
-            customerName = currentPaymentCustomer.name;
-            gstin = currentPaymentCustomer.gstin;
-        } else {
-            console.error('No customer selected for ledger');
-            return;
-        }
-    }
-
-    try {
-        // Get date range based on period selection
-        const dateRange = getDateRangeForPeriod();
-        console.log('Date range for filtering:', dateRange); // Debug log
-
-        const financialData = await getCustomerFinancialData(customerName, gstin, dateRange);
-        console.log('Financial data loaded:', financialData); // Debug log
-
-        const summary = calculateCustomerSummary(
-            customerName,
-            gstin,
-            financialData.bills,
-            financialData.payments,
-            financialData.creditNotes,
-            dateRange
-        );
-
-        displayCustomerSummary(summary);
-        displayBillsTable(financialData.bills);
-        displayPaymentsTable(financialData.payments);
-        displayCreditNotesTable(financialData.creditNotes);
-    } catch (error) {
-        console.error('Error loading ledger data:', error);
-    }
-}
 // Add event listeners when DOM is loaded
 document.addEventListener('DOMContentLoaded', function () {
     // Close payment dialog
@@ -10096,80 +9944,6 @@ async function getCustomerFinancialData(customerName, gstin, dateRange = null) {
     return filteredData;
 }
 
-function calculateCustomerSummary(customerName, gstin, bills, payments, creditNotes, dateRange = null) {
-    // Calculate bill totals
-    const billTotals = bills.reduce((acc, bill) => {
-        if (bill.source === 'gst') {
-            // GST bill totals
-            acc.subTotal += parseFloat(bill.totals?.subtotal || 0);
-            acc.discount += parseFloat(bill.totals?.discount || 0);
-            acc.grandTotal += parseFloat(bill.totals?.grandTotal || 0);
-        } else {
-            // Regular bill totals
-            const subtotal = parseFloat(bill.totalAmount || 0);
-            const discountPercent = bill.taxSettings?.discountPercent || 0;
-            const discountAmount = subtotal * (discountPercent / 100);
-            const gstPercent = bill.taxSettings?.gstPercent || 0;
-            const gstAmount = (subtotal - discountAmount) * (gstPercent / 100);
-            const grandTotal = subtotal - discountAmount + gstAmount;
-
-            acc.subTotal += subtotal;
-            acc.discount += discountAmount;
-            acc.grandTotal += grandTotal;
-        }
-        return acc;
-    }, { subTotal: 0, discount: 0, grandTotal: 0 });
-
-    // Calculate payment totals
-    const paymentTotal = payments.reduce((sum, payment) => sum + parseFloat(payment.amount), 0);
-    const creditNoteTotal = creditNotes.reduce((sum, creditNote) => sum + parseFloat(creditNote.amount), 0);
-
-    // Calculate balance
-    const totalPaymentsAndCredits = paymentTotal + creditNoteTotal;
-    const balance = billTotals.grandTotal - totalPaymentsAndCredits;
-
-    // Find date range from actual data (for display purposes)
-    const allDates = [
-        ...bills.map(bill => new Date(bill.date || bill.invoiceDetails?.date)),
-        ...payments.map(payment => new Date(payment.date)),
-        ...creditNotes.map(creditNote => new Date(creditNote.date))
-    ].filter(date => !isNaN(date.getTime()));
-
-    const minDate = allDates.length > 0 ? new Date(Math.min(...allDates)) : new Date();
-    const maxDate = allDates.length > 0 ? new Date(Math.max(...allDates)) : new Date();
-
-    // Update date range display in summary
-    let dateRangeText = 'All Dates';
-    if (dateRange) {
-        dateRangeText = `${dateRange.startDate} to ${dateRange.endDate}`;
-    } else if (allDates.length > 0) {
-        // Format dates as dd-mm-yyyy for display
-        const formatDate = (date) => {
-            const day = String(date.getDate()).padStart(2, '0');
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const year = date.getFullYear();
-            return `${day}-${month}-${year}`;
-        };
-        dateRangeText = `${formatDate(minDate)} to ${formatDate(maxDate)}`;
-    }
-
-    return {
-        customerName: customerName || 'Unknown Customer',
-        gstin: gstin || 'Not provided',
-        totalBills: bills.length,
-        totalPayments: payments.length,
-        totalCreditNotes: creditNotes.length,
-        subTotal: billTotals.subTotal,
-        discount: billTotals.discount,
-        grandTotal: billTotals.grandTotal,
-        paymentTotal: paymentTotal,
-        creditNoteTotal: creditNoteTotal,
-        balance: balance,
-        advancePayment: balance < 0 ? Math.abs(balance) : 0,
-        dateRange: dateRangeText
-    };
-}
-
 function setupPaymentDialog() {
     // Add payment button
     document.getElementById('add-payment-btn').addEventListener('click', addNewPayment);
@@ -10258,13 +10032,27 @@ async function loadPaymentsAndCreditNotesWithFilters() {
 async function addNewPayment() {
     if (!currentPaymentCustomer) return;
 
+    // Handle payment method (including custom methods)
+    const methodSelect = document.getElementById('payment-method');
+    let finalMethod = methodSelect.value;
+
+    if (finalMethod === 'Other') {
+        const customMethod = document.getElementById('custom-payment-method').value.trim();
+        if (!customMethod) {
+            showNotification('Please enter custom payment method name');
+            return;
+        }
+        finalMethod = customMethod;
+        await saveCustomPaymentMethod(customMethod);
+        await loadCustomPaymentMethods(); // Refresh dropdown
+    }
+
     const date = document.getElementById('payment-date').value;
-    const method = document.getElementById('payment-method').value;
     const amount = parseFloat(document.getElementById('payment-amount').value);
     const notes = document.getElementById('payment-notes').value;
 
     // Different validation for Payments vs Credit Notes
-    if (!date || !method || isNaN(amount)) {
+    if (!date || !finalMethod || isNaN(amount)) {
         showNotification('Please fill all required fields with valid values', 'error');
         return;
     }
@@ -10287,7 +10075,12 @@ async function addNewPayment() {
         return;
     }
 
-    const paymentData = { date, method, amount, notes };
+    const paymentData = {
+        date,
+        method: finalMethod, // Use the final method (could be custom)
+        amount,
+        notes
+    };
 
     try {
         await savePaymentRecord(
@@ -11374,3 +11167,504 @@ function applyColumnVisibility() {
     closeColumnDialog();
 }
 
+//new ledger functions
+// Custom Payment Method Handler
+function handlePaymentMethodChange() {
+    const methodSelect = document.getElementById('payment-method');
+    const customContainer = document.getElementById('custom-method-container');
+
+    if (methodSelect.value === 'Other') {
+        customContainer.style.display = 'block';
+    } else {
+        customContainer.style.display = 'none';
+    }
+}
+
+// Save custom payment method to DB
+async function saveCustomPaymentMethod(methodName) {
+    try {
+        const customMethods = await getFromDB('settings', 'customPaymentMethods') || [];
+        if (!customMethods.includes(methodName)) {
+            customMethods.push(methodName);
+            await setInDB('settings', 'customPaymentMethods', customMethods);
+        }
+    } catch (error) {
+        console.error('Error saving custom payment method:', error);
+    }
+}
+
+// Load custom payment methods
+async function loadCustomPaymentMethods() {
+    try {
+        const customMethods = await getFromDB('settings', 'customPaymentMethods') || [];
+        const methodSelect = document.getElementById('payment-method');
+
+        // Remove existing custom methods (except "Other")
+        const optionsToRemove = [];
+        for (let i = 0; i < methodSelect.options.length; i++) {
+            if (methodSelect.options[i].value !== 'Other' &&
+                !['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Card'].includes(methodSelect.options[i].value)) {
+                optionsToRemove.push(i);
+            }
+        }
+
+        // Remove in reverse order to avoid index issues
+        optionsToRemove.reverse().forEach(index => {
+            methodSelect.remove(index);
+        });
+
+        // Add custom methods
+        customMethods.forEach(method => {
+            const option = document.createElement('option');
+            option.value = method;
+            option.textContent = method;
+            methodSelect.appendChild(option);
+        });
+    } catch (error) {
+        console.error('Error loading custom payment methods:', error);
+    }
+}
+
+// New Ledger Data Loading Function
+async function loadLedgerData(customerName, gstin) {
+    if (!customerName) {
+        if (currentPaymentCustomer && currentPaymentCustomer.name) {
+            customerName = currentPaymentCustomer.name;
+            gstin = currentPaymentCustomer.gstin;
+        } else {
+            console.error('No customer selected for ledger');
+            return;
+        }
+    }
+
+    try {
+        const dateRange = getDateRangeForPeriod();
+        const financialData = await getCustomerFinancialData(customerName, gstin, dateRange);
+        // In loadLedgerData function, update this line:
+        const openingBalance = await calculateOpeningBalance(customerName, gstin, dateRange);
+
+        displayUnifiedLedgerTable(financialData, openingBalance, dateRange);
+    } catch (error) {
+        console.error('Error loading ledger data:', error);
+    }
+}
+
+// FIX: Correct date comparison for opening balance
+async function calculateOpeningBalance(customerName, gstin, dateRange) {
+    if (!dateRange) return { amount: 0, type: 'debit', date: 'Opening' };
+
+    try {
+        console.log('Calculating opening balance for date range:', dateRange);
+
+        // Get all transactions
+        const allPreviousData = await getCustomerFinancialData(customerName, gstin, null);
+
+        let totalDebit = 0;
+        let totalCredit = 0;
+        let lastTransactionDate = 'Opening';
+
+        // Convert filter start date to comparable format
+        const filterStartDate = convertToComparableDate(dateRange.startDate);
+        console.log('Filter start date:', dateRange.startDate, 'as:', filterStartDate);
+
+        // Process all transactions and find the latest one before filter
+        const allTransactions = [];
+
+        // Add bills
+        allPreviousData.bills.forEach(bill => {
+            const billDate = bill.date || bill.invoiceDetails?.date;
+            if (billDate) {
+                let billTotal = 0;
+
+                if (bill.source === 'gst') {
+                    billTotal = parseFloat(bill.totals?.grandTotal || 0);
+                } else {
+                    const subtotal = parseFloat(bill.totalAmount || 0);
+                    const discountPercent = bill.taxSettings?.discountPercent || 0;
+                    const discountAmount = subtotal * (discountPercent / 100);
+                    const gstPercent = bill.taxSettings?.gstPercent || 0;
+                    const gstAmount = (subtotal - discountAmount) * (gstPercent / 100);
+                    billTotal = subtotal - discountAmount + gstAmount;
+                }
+
+                const transactionDate = convertToComparableDate(billDate);
+                const isBeforeFilter = transactionDate < filterStartDate;
+
+                allTransactions.push({
+                    date: billDate,
+                    comparableDate: transactionDate,
+                    amount: billTotal,
+                    type: 'bill',
+                    isBeforeFilter: isBeforeFilter
+                });
+
+                console.log('Bill:', billDate, 'Comparable:', transactionDate, 'Before filter:', isBeforeFilter);
+            }
+        });
+
+        // Add payments
+        allPreviousData.payments.forEach(payment => {
+            const paymentDate = payment.date;
+            if (paymentDate) {
+                const paymentAmount = parseFloat(payment.amount);
+                const transactionDate = convertToComparableDate(paymentDate);
+                const isBeforeFilter = transactionDate < filterStartDate;
+
+                allTransactions.push({
+                    date: paymentDate,
+                    comparableDate: transactionDate,
+                    amount: paymentAmount,
+                    type: 'payment',
+                    isBeforeFilter: isBeforeFilter
+                });
+
+                console.log('Payment:', paymentDate, 'Comparable:', transactionDate, 'Before filter:', isBeforeFilter);
+            }
+        });
+
+        // Add credit notes
+        allPreviousData.creditNotes.forEach(creditNote => {
+            const cnDate = creditNote.date;
+            if (cnDate) {
+                const cnAmount = parseFloat(creditNote.amount);
+                const transactionDate = convertToComparableDate(cnDate);
+                const isBeforeFilter = transactionDate < filterStartDate;
+
+                allTransactions.push({
+                    date: cnDate,
+                    comparableDate: transactionDate,
+                    amount: cnAmount,
+                    type: 'credit-note',
+                    isBeforeFilter: isBeforeFilter
+                });
+
+                console.log('Credit Note:', cnDate, 'Comparable:', transactionDate, 'Before filter:', isBeforeFilter);
+            }
+        });
+
+        // Sort all transactions by date (newest first)
+        allTransactions.sort((a, b) => b.comparableDate - a.comparableDate);
+
+        console.log('All transactions sorted (newest first):', allTransactions);
+
+        // Find the latest transaction before filter period
+        let foundLatest = false;
+
+        for (const transaction of allTransactions) {
+            if (transaction.isBeforeFilter) {
+                // This is the latest transaction before filter
+                if (!foundLatest) {
+                    lastTransactionDate = transaction.date;
+                    foundLatest = true;
+                    console.log('Found latest transaction before filter:', transaction.date);
+                }
+
+                // Add to totals
+                if (transaction.type === 'bill') {
+                    totalDebit += transaction.amount;
+                } else {
+                    totalCredit += transaction.amount;
+                }
+
+                console.log('Included in opening balance:', transaction.date, transaction.amount, transaction.type);
+            }
+        }
+
+        // CORRECTED LOGIC: Calculate NET balance
+        const netBalance = totalDebit - totalCredit;
+
+        console.log('Final opening balance calculation:', {
+            totalDebit,
+            totalCredit,
+            netBalance,
+            lastTransactionDate,
+            dateRange
+        });
+
+        let result = { amount: 0, type: 'debit', date: lastTransactionDate };
+
+        if (netBalance > 0) {
+            result = { amount: netBalance, type: 'debit', date: lastTransactionDate };
+        } else if (netBalance < 0) {
+            result = { amount: Math.abs(netBalance), type: 'credit', date: lastTransactionDate };
+        }
+
+        return result;
+
+    } catch (error) {
+        console.error('Error calculating opening balance:', error);
+        return { amount: 0, type: 'debit', date: 'Opening' };
+    }
+}
+
+
+
+// FIX: Improved date comparison function
+function isDateBefore(dateStr, compareDateStr) {
+    try {
+        const dateObj = convertToComparableDate(dateStr);
+        const compareDateObj = convertToComparableDate(compareDateStr);
+
+        return dateObj < compareDateObj;
+    } catch (error) {
+        console.error('Error comparing dates:', error, dateStr, compareDateStr);
+        return false;
+    }
+}
+
+// FIX: Improved date conversion function
+function convertToComparableDate(dateStr) {
+    try {
+        // Handle dd-mm-yyyy format
+        const [day, month, year] = dateStr.split('-');
+
+        // Ensure 2-digit day and month
+        const paddedDay = day.padStart(2, '0');
+        const paddedMonth = month.padStart(2, '0');
+
+        // Create date in yyyy-mm-dd format for proper comparison
+        return new Date(`${year}-${paddedMonth}-${paddedDay}`);
+    } catch (error) {
+        console.error('Error converting date:', error, dateStr);
+        return new Date(); // Return current date as fallback
+    }
+}
+function displayUnifiedLedgerTable(financialData, openingBalance, dateRange) {
+    const tbody = document.getElementById('ledger-tbody');
+    tbody.innerHTML = '';
+
+    console.log('Displaying ledger table:', {
+        openingBalance,
+        billsCount: financialData.bills.length,
+        paymentsCount: financialData.payments.length,
+        creditNotesCount: financialData.creditNotes.length,
+        dateRange
+    });
+
+    // CORRECTED: Start with NET opening balance
+    let runningBalance = 0;
+    if (openingBalance.type === 'debit') {
+        runningBalance = openingBalance.amount;  // Positive balance
+    } else {
+        runningBalance = -openingBalance.amount; // Negative balance
+    }
+
+    let totalDebit = 0;
+    let totalCredit = 0;
+
+    // INCLUDE OPENING BALANCE IN TOTALS
+    if (openingBalance.type === 'debit' && openingBalance.amount > 0) {
+        totalDebit += openingBalance.amount;
+    } else if (openingBalance.type === 'credit' && openingBalance.amount > 0) {
+        totalCredit += openingBalance.amount;
+    }
+
+    // Add Opening Balance Row
+    const openingRow = document.createElement('tr');
+    const openingBalanceDate = openingBalance.date || (dateRange ? getPreviousPeriodEndDate(dateRange.startDate) : 'Opening');
+
+    console.log('Opening balance display:', {
+        amount: openingBalance.amount,
+        type: openingBalance.type,
+        date: openingBalanceDate
+    });
+
+
+    // Show in ONLY ONE column based on net balance
+    if (openingBalance.type === 'debit' && openingBalance.amount > 0) {
+        openingRow.innerHTML = `
+            <td>${openingBalanceDate}</td>
+            <td class="bold">Opening Balance</td>
+            <td class="right">${openingBalance.amount.toFixed(2)}</td>
+            <td class="right"></td>
+        `;
+    } else if (openingBalance.type === 'credit' && openingBalance.amount > 0) {
+        openingRow.innerHTML = `
+            <td>${openingBalanceDate}</td>
+            <td class="bold">Opening Balance</td>
+            <td class="right"></td>
+            <td class="right">${openingBalance.amount.toFixed(2)}</td>
+        `;
+    } else {
+        // Zero balance
+        openingRow.innerHTML = `
+            <td>${openingBalanceDate}</td>
+            <td class="bold">Opening Balance</td>
+            <td class="right">0.00</td>
+            <td class="right"></td>
+        `;
+    }
+    tbody.appendChild(openingRow);
+
+    // Combine and sort all transactions by date
+    const allTransactions = [];
+
+    // Add bills as debit transactions
+    financialData.bills.forEach(bill => {
+        const invoiceNo = bill.source === 'gst' ?
+            bill.invoiceDetails?.number : bill.customer?.billNo;
+        const amount = bill.source === 'gst' ?
+            parseFloat(bill.totals?.grandTotal || 0) :
+            calculateRegularBillTotal(bill);
+
+        allTransactions.push({
+            date: bill.date || bill.invoiceDetails?.date,
+            particulars: `By Sale A/c (Invoice No- ${invoiceNo})`,
+            debit: amount,
+            credit: 0,
+            type: 'bill'
+        });
+        totalDebit += amount;
+
+        console.log('Added bill transaction:', bill.date, amount);
+    });
+
+    // Add payments as credit transactions
+    financialData.payments.forEach(payment => {
+        const paymentAmount = parseFloat(payment.amount);
+        allTransactions.push({
+            date: payment.date,
+            particulars: `To ${payment.method} A/c${payment.notes ? `<br>${payment.notes}` : ''}`,
+            debit: 0,
+            credit: paymentAmount,
+            type: 'payment'
+        });
+        totalCredit += paymentAmount;
+
+        console.log('Added payment transaction:', payment.date, paymentAmount);
+    });
+
+    // Add credit notes as credit transactions
+    financialData.creditNotes.forEach(creditNote => {
+        const cnAmount = parseFloat(creditNote.amount);
+        allTransactions.push({
+            date: creditNote.date,
+            particulars: `To ${creditNote.method} A/c (Credit Note)${creditNote.notes ? `<br>${creditNote.notes}` : ''}`,
+            debit: 0,
+            credit: cnAmount,
+            type: 'credit-note'
+        });
+        totalCredit += cnAmount;
+
+        console.log('Added credit note transaction:', creditNote.date, cnAmount);
+    });
+
+    // Sort transactions by date
+    allTransactions.sort((a, b) => {
+        const dateA = new Date(a.date.split('-').reverse().join('-'));
+        const dateB = new Date(b.date.split('-').reverse().join('-'));
+        return dateA - dateB;
+    });
+
+    console.log('Sorted transactions:', allTransactions);
+
+    // Add transactions to table and calculate running balance
+    allTransactions.forEach(transaction => {
+        // Update running balance
+        runningBalance += transaction.debit - transaction.credit;
+
+        console.log('Processing transaction:', {
+            date: transaction.date,
+            debit: transaction.debit,
+            credit: transaction.credit,
+            runningBalance: runningBalance
+        });
+
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td>${transaction.date}</td>
+            <td>${transaction.particulars}</td>
+            <td class="right">${transaction.debit > 0 ? transaction.debit.toFixed(2) : ''}</td>
+            <td class="right">${transaction.credit > 0 ? transaction.credit.toFixed(2) : ''}</td>
+        `;
+        tbody.appendChild(row);
+    });
+
+    // NEW: Calculate net amount for footer
+    const netAmount = totalDebit - totalCredit;
+
+    // Determine what to show in Balance Amount and Advance Deposit
+    let balanceAmount = 0;
+    let advanceDeposit = 0;
+
+    if (netAmount > 0) {
+        // Debit > Credit: Show positive balance amount
+        balanceAmount = netAmount;
+        advanceDeposit = 0;
+    } else if (netAmount < 0) {
+        // Credit > Debit: Show advance deposit
+        balanceAmount = 0;
+        advanceDeposit = Math.abs(netAmount);
+    } else {
+        // Equal: Show zero for both
+        balanceAmount = 0;
+        advanceDeposit = 0;
+    }
+
+    // UPDATE: New footer structure with correct logic
+    const tfoot = document.querySelector('.unified-ledger-table tfoot');
+    if (tfoot) {
+        tfoot.innerHTML = `
+            <tr class="total-row highlight">
+                <td colspan="2" class="right bold">TOTAL</td>
+                <td class="right bold">₹${totalDebit.toFixed(2)}</td>
+                <td class="right bold">₹${totalCredit.toFixed(2)}</td>
+            </tr>
+            <tr class="total-row highlight">
+                <td colspan="2" class="right bold">Balance Amount</td>
+                <td style="text-align:center;" class="right bold" colspan="2">${balanceAmount > 0 ? `₹${balanceAmount.toFixed(2)}` : '0.00'}</td>
+            </tr>
+            ${advanceDeposit > 0 ? `
+            <tr class="total-row highlight">
+                <td colspan="2" class="right bold">Advance Deposit</td>
+                <td style="text-align:center;" class="right bold" colspan="2">₹${advanceDeposit.toFixed(2)}</td>
+            </tr>
+            ` : ''}
+            <tr class="closing-balance-row">
+                <td id="closing-balance-date">${allTransactions.length > 0 ? allTransactions[allTransactions.length - 1].date : (dateRange ? dateRange.endDate : new Date().toLocaleDateString('en-IN'))}</td>
+                <td class="bold">Closing Balance</td>
+                <td class="right bold" id="closing-balance-debit">${runningBalance > 0 ? `₹${runningBalance.toFixed(2)}` : ''}</td>
+                <td class="right bold" id="closing-balance-credit">${runningBalance < 0 ? `₹${Math.abs(runningBalance).toFixed(2)}` : ''}</td>
+            </tr>
+        `;
+    }
+
+    console.log('Footer calculations:', {
+        totalDebit,
+        totalCredit,
+        netAmount,
+        balanceAmount,
+        advanceDeposit,
+        runningBalance
+    });
+
+    console.log('Ledger table display completed with new footer structure');
+}
+
+// Helper function to get previous period end date
+function getPreviousPeriodEndDate(startDate) {
+    try {
+        const [day, month, year] = startDate.split('-');
+        const dateObj = new Date(`${year}-${month}-${day}`);
+        dateObj.setDate(dateObj.getDate() - 1);
+
+        const prevDay = String(dateObj.getDate()).padStart(2, '0');
+        const prevMonth = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const prevYear = dateObj.getFullYear();
+
+        return `${prevDay}-${prevMonth}-${prevYear}`;
+    } catch (error) {
+        console.error('Error getting previous period date:', error);
+        return 'Opening';
+    }
+}
+
+// Helper function to calculate regular bill total
+function calculateRegularBillTotal(bill) {
+    const subtotal = parseFloat(bill.totalAmount || 0);
+    const discountPercent = bill.taxSettings?.discountPercent || 0;
+    const discountAmount = subtotal * (discountPercent / 100);
+    const gstPercent = bill.taxSettings?.gstPercent || 0;
+    const gstAmount = (subtotal - discountAmount) * (gstPercent / 100);
+    return subtotal - discountAmount + gstAmount;
+}
