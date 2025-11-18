@@ -1049,6 +1049,9 @@
             <button onclick="openBatchInvoiceModal()" class="settings-btn">
                 <span class="material-icons">receipt</span>BATCH INVOICE
             </button>
+            <button onclick="openRestoredBillsModal()" class="settings-btn">
+                <span class="material-icons">cloud_download</span>RESTORED BILLS
+            </button>
             <!-- Add this button in the settings sidebar with other buttons -->
             <button onclick="handlePrint()" class="settings-btn"><span class="material-icons">print</span>PRINT</button>
         </div>
@@ -1549,6 +1552,27 @@
             <div class="dialog-buttons">
                 <button onclick="applyColumnVisibility()">Apply</button>
                 <button onclick="closeColumnDialog()">Cancel</button>
+            </div>
+        </div>
+    </div>
+    <!-- Restored Bills Modal -->
+    <div id="restored-bills-modal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">
+                <h3>Restored Bills</h3>
+                <span class="close" onclick="closeRestoredBillsModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="search-add-bar">
+                    <input type="text" id="restored-bills-search" placeholder="Search restored bills..."
+                        oninput="searchRestoredBills()">
+                    <button onclick="restoreIndividualBill()" class="btn-primary">
+                        <i class="material-icons">add</i> Restore Bill from JSON
+                    </button>
+                </div>
+                <div id="restored-bills-list" class="items-list">
+                    <!-- Restored bills will be loaded here -->
+                </div>
             </div>
         </div>
     </div>
