@@ -2778,3 +2778,105 @@ tr[data-id] .dimensions span[style*="color: red"] {
     border: 1px solid #ddd;
     border-radius: 3px;
 }
+
+/* Restored Bills specific styles */
+.btn-download, .btn-load, .btn-save {
+    background: #3498db;
+    color: white;
+    border: none;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.btn-download:hover { background: #2980b9; }
+.btn-load { background: #27ae60; }
+.btn-load:hover { background: #219a52; }
+.btn-save { background: #f39c12; }
+.btn-save:hover { background: #e67e22; }
+
+/* Restored bill card specific */
+.saved-bill-card .saved-bill-details div:last-child {
+    color: #e74c3c;
+    font-weight: bold;
+}
+/* Primary Button Styles */
+.btn-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    padding: 10px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+    text-decoration: none;
+}
+
+.btn-primary:hover {
+    background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.btn-primary:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
+}
+
+.btn-primary .material-icons {
+    font-size: 18px;
+}
+
+/* Alternative simpler primary button */
+.btn-primary.simple {
+    background: #3498db;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.3s ease;
+}
+
+.btn-primary.simple:hover {
+    background: #2980b9;
+}
+
+/* For the search-add-bar specifically */
+.search-add-bar .btn-primary {
+    margin-left: auto;
+    white-space: nowrap;
+}
+
+/* If you want it to match your existing button styles */
+.search-add-bar .btn-primary {
+    background: #27ae60;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.3s ease;
+}
+
+.search-add-bar .btn-primary:hover {
+    background: #219a52;
+}
