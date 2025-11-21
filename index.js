@@ -2167,7 +2167,6 @@ async function reduceStockOnSave() {
                     const newStock = Math.max(0, savedItem.stockQuantity - quantity);
                     savedItem.stockQuantity = newStock;
                     await setInDB('savedItems', itemName, savedItem);
-                    console.log(`Reduced stock for ${itemName}: ${savedItem.stockQuantity} -> ${newStock}`);
                 }
             }
         }
@@ -2695,13 +2694,12 @@ async function saveCurrentBill() {
         const billNo = document.getElementById('billNo').value.trim();
         const totalAmount = document.getElementById('createTotalAmountManual').textContent || '0.00';
 
-        // Simple validation - just check if bill number has any content
         if (!billNo || billNo.length === 0) {
             showNotification('Please enter a bill number before saving.', 'error');
             return;
         }
 
-        // Check for duplicate bill number (skip if in edit mode with same bill number)
+        // Check for duplicate bill number
         if (!editMode || (editMode && billNo !== window.currentEditingBillOriginalNumber)) {
             const isDuplicate = await checkDuplicateBillNumber(billNo, 'regular');
             if (isDuplicate) {
@@ -2710,7 +2708,7 @@ async function saveCurrentBill() {
             }
         }
 
-        // Auto-save customer if name exists AND doesn't already exist
+        // Auto-save customer if name exists
         if (customerName) {
             await autoSaveRegularCustomer(customerName);
         }
@@ -2719,35 +2717,32 @@ async function saveCurrentBill() {
             const currentData = await getFromDB('billDataManual', 'currentBill');
             if (!currentData) return;
 
-            // Replace the current item count calculation
             const itemCount = document.querySelectorAll('#createListManual tbody tr[data-id]').length;
 
-            // Update the saved bill data to include proper item count
             const savedBill = {
                 ...currentData,
                 title: `${customerName} - ${billNo}`,
                 totalAmount: totalAmount,
                 timestamp: Date.now(),
                 date: document.getElementById('billDate').value || new Date().toLocaleDateString(),
-                itemCount: itemCount // Add this line
+                itemCount: itemCount
             };
 
             let billId;
             if (editMode && currentEditingBillId) {
-                // Edit mode: Update existing bill
+                // EDIT MODE: Restore original stock first
+                await restoreStockFromOriginalBill(currentEditingBillId);
+
                 billId = currentEditingBillId;
                 await setInDB('savedBills', billId, savedBill);
-                // ADD STOCK REDUCTION HERE - for edit mode
+                // Then reduce stock with new quantities
                 await reduceStockOnSave();
                 showNotification('Bill updated successfully!');
-
-                // Reset edit mode
                 resetEditMode();
             } else {
-                // Normal mode: Create new bill
+                // NORMAL MODE: Just reduce stock
                 billId = `saved-bill-${Date.now()}`;
                 await setInDB('savedBills', billId, savedBill);
-                // ADD STOCK REDUCTION HERE - for new bill
                 await reduceStockOnSave();
                 showNotification('Bill saved successfully!');
             }
@@ -2755,6 +2750,28 @@ async function saveCurrentBill() {
         } catch (error) {
             console.error('Error saving bill:', error);
         }
+    }
+}
+
+async function restoreStockFromOriginalBill(billId) {
+    try {
+        const originalBill = await getFromDB('savedBills', billId);
+        if (!originalBill || !originalBill.tableStructure) return;
+
+        // Restore stock for each item in the original bill
+        for (const rowData of originalBill.tableStructure) {
+            if (rowData.type === 'item' && rowData.itemName) {
+                const savedItem = await getFromDB('savedItems', rowData.itemName);
+                if (savedItem && savedItem.stockQuantity !== undefined) {
+                    const originalQuantity = parseFloat(rowData.quantity) || 0;
+                    // Add back the original quantity to stock
+                    savedItem.stockQuantity += originalQuantity;
+                    await setInDB('savedItems', rowData.itemName, savedItem);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error restoring stock from original bill:', error);
     }
 }
 
@@ -4404,6 +4421,9 @@ async function loadFromLocalStorage() {
                 gstPercent = saved.taxSettings.gstPercent || 0;
             }
 
+            // ADD THIS: Save tax settings to persist dialog states
+            await saveTaxSettings();
+
             await loadCompanyInfo();
             await loadGSTCustomerDataFromLocalStorage();
 
@@ -4779,6 +4799,7 @@ function saveStateToHistory() {
         },
         taxSettings: {
             discountPercent: storeWithPrecision(discountPercent),
+            discountAmount: storeWithPrecision(discountAmount),
             gstPercent: storeWithPrecision(gstPercent)
         }
     };
@@ -5079,12 +5100,9 @@ async function saveToHistory() {
                 gstin: document.getElementById("custGSTIN").value
             },
             taxSettings: {
-                // In saveToLocalStorage() and saveStateToHistory():
-                taxSettings: {
-                    // discountPercent: 0, // Always save as 0, let modal handle it
-                    // discountAmount: 0,  // Always save as 0, let modal handle it
-                    gstPercent: storeWithPrecision(gstPercent)
-                }
+                discountPercent: storeWithPrecision(discountPercent),
+                discountAmount: storeWithPrecision(discountAmount),
+                gstPercent: storeWithPrecision(gstPercent)
             },
             timestamp: Date.now(),
             totalAmount: "0.00"
@@ -5249,6 +5267,7 @@ async function removeHistoryItem(id, event) {
 }
 
 async function loadFromHistory(item) {
+
     if (!item.data) return;
 
     const data = item.data;
@@ -5267,8 +5286,13 @@ async function loadFromHistory(item) {
 
         if (data.taxSettings) {
             discountPercent = data.taxSettings.discountPercent || 0;
+            discountAmount = data.taxSettings.discountAmount || 0;
             gstPercent = data.taxSettings.gstPercent || 0;
+
+            // SAVE TAX SETTINGS FIRST
+            await saveTaxSettings();
         }
+
 
         const createListTbody = document.querySelector("#createListManual tbody");
         const copyListTbody = document.querySelector("#copyListManual tbody");
@@ -5348,7 +5372,32 @@ async function loadFromHistory(item) {
 
         updateSerialNumbers();
         updateTotal();
+        updateGSTINVisibility();
         await saveToLocalStorage();
+        // UPDATE DIALOG BOXES
+        setTimeout(() => {
+            // Update discount dialog
+            const discountTypeSelect = document.getElementById('discount-type-select');
+            const discountPercentInput = document.getElementById('discount-percent-input');
+            const discountAmountInput = document.getElementById('discount-amount-input');
+
+            if (discountPercent > 0) {
+                if (discountTypeSelect) discountTypeSelect.value = 'percent';
+                if (discountPercentInput) discountPercentInput.value = discountPercent;
+            } else if (discountAmount > 0) {
+                if (discountTypeSelect) discountTypeSelect.value = 'amount';
+                if (discountAmountInput) discountAmountInput.value = discountAmount;
+            } else {
+                if (discountTypeSelect) discountTypeSelect.value = 'none';
+            }
+
+            // Update GST dialog
+            const gstInput = document.getElementById('gst-input');
+            if (gstInput) gstInput.value = gstPercent;
+
+            // Update UI
+            handleDiscountTypeChange();
+        }, 100);
         saveStateToHistory();
 
         // Initialize drag and drop for all rows
@@ -5771,12 +5820,15 @@ async function clearAllData(silent = false) {
     // Save current state to history BEFORE clearing (only if there's actual data)
     const hasItems = document.querySelectorAll('#createListManual tbody tr[data-id]').length > 0;
     const hasSections = document.querySelectorAll('#createListManual tbody tr.section-row').length > 0;
+    // ↓↓↓ ADD TAX SETTINGS CHECK ↓↓↓
+    const hasTaxSettings = discountPercent > 0 || discountAmount > 0 || gstPercent > 0;
 
-    if (hasItems || hasSections) {
+    if (hasItems || hasSections || hasTaxSettings) {
         // Only save to history if there's actual content to preserve
         saveStateToHistory();
         await saveToHistory();
     }
+
 
     // Clear current workspace data
     document.getElementById("custName").value = "";
@@ -5904,6 +5956,7 @@ async function clearAllData(silent = false) {
     currentlyEditingRowIdManual = null;
 
     discountPercent = 0;
+    discountAmount = 0;
     gstPercent = 0;
 
     currentDimensions = {
@@ -5917,9 +5970,35 @@ async function clearAllData(silent = false) {
     updateTotal();
     // Reset edit mode when clearing all data
     resetEditMode();
+
+    // RESET DISCOUNT AND GST DIALOGS
+    setTimeout(() => {
+        // Reset discount modal
+        const discountTypeSelect = document.getElementById('discount-type-select');
+        const discountPercentInput = document.getElementById('discount-percent-input');
+        const discountAmountInput = document.getElementById('discount-amount-input');
+
+        if (discountTypeSelect) discountTypeSelect.value = 'none';
+        if (discountPercentInput) discountPercentInput.value = '';
+        if (discountAmountInput) discountAmountInput.value = '';
+
+        // Reset GST modal
+        const gstInput = document.getElementById('gst-input');
+        const gstinInput = document.getElementById('gstin-input');
+
+        if (gstInput) gstInput.value = '';
+        if (gstinInput) gstinInput.value = '';
+
+        // Update UI
+        handleDiscountTypeChange();
+    }, 100);
+
+    // SAVE TAX SETTINGS TO DB (THIS IS THE KEY FIX)
+    await saveTaxSettings();
+    await saveToLocalStorage();
+
     await saveCustomerDialogState();
     // Save the empty state to localStorage but NOT to history
-    await saveToLocalStorage();
 
     // ADD THIS: Force save the cleared customer details state
     await saveGSTCustomerDataToLocalStorage();
@@ -8085,15 +8164,16 @@ async function saveGSTCurrentBill() {
         };
 
         let billId;
+        // In saveGSTCurrentBill() function, add this in the edit mode section:
         if (editMode && currentEditingBillId) {
-            // Edit mode: Update existing bill with the SAME ID
+            // EDIT MODE: Restore original stock first
+            await restoreStockFromOriginalBill(currentEditingBillId);
+
             billId = currentEditingBillId;
             await setInDB('gstSavedBills', billId, savedBill);
-            // ADD STOCK REDUCTION HERE - for GST edit mode
+            // Then reduce stock with new quantities
             await reduceStockOnSave();
             showNotification('GST Bill updated successfully!');
-
-            // Reset edit mode
             resetEditMode();
         } else {
             // Normal mode: Create new bill
