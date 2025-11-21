@@ -2880,3 +2880,11 @@ tr[data-id] .dimensions span[style*="color: red"] {
 .search-add-bar .btn-primary:hover {
     background: #219a52;
 }
+
+/*
+terms modal 
+ */
+ .terms-list-modal .modal-body {
+    max-height: 70vh !important;
+    overflow-y: auto !important;
+}
