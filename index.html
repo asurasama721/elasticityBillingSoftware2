@@ -783,13 +783,6 @@
                     <textarea id="saved-notes" placeholder="Enter notes" rows="3"></textarea>
                 </div>
 
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="saved-show-dimensions" checked>
-                        Show dimensions in bill
-                    </label>
-                </div>
-
                 <div class="form-actions">
                     <button onclick="closeAddItemModal()" class="btn-cancel">Cancel</button>
                     <button onclick="saveItem()" class="btn-apply" id="save-item-btn">Save Item</button>
@@ -1052,6 +1045,12 @@
             <button onclick="openRestoredBillsModal()" class="settings-btn">
                 <span class="material-icons">cloud_download</span>RESTORED BILLS
             </button>
+            <button onclick="openBillHeadingModal()" class="settings-btn">
+                <span class="material-icons">title</span>BILL HEADING
+            </button>
+            <button onclick="openBrandingModal()" class="settings-btn">
+                <span class="material-icons">branding_watermark</span>LOGO & SIGN
+            </button>
             <!-- Add this button in the settings sidebar with other buttons -->
             <button onclick="handlePrint()" class="settings-btn"><span class="material-icons">print</span>PRINT</button>
         </div>
@@ -1077,17 +1076,23 @@
     <div id="main-container">
         <!-- Regular Bill Container -->
         <div id="bill-container" style="display: none">
-            <div class="company-details">
-                <div class="top-name" contenteditable="true" oninput="saveToLocalStorage()" id="companyName">
-                    COMPANY NAME
-                </div>
-                <div class="contact">
-                    <p contenteditable="true" oninput="saveToLocalStorage()" id="companyAddr">Address</p>
-                    <p contenteditable="true" oninput="saveToLocalStorage()" id="companyPhone">+91 01234-56789</p>
-                    <p contenteditable="true" oninput="saveToLocalStorage()" id="companyGstin" style="display: none;">
-                        GSTIN : Your 15-digit GSTIN</p>
+            <h4 id="regular-bill-heading"
+                style="display: none; text-align: center; margin-bottom: 5px; text-transform: uppercase;"></h4>
+            <div class="company-details" id="regular-company-details">
+                <div class="company-text">
+                    <div class="top-name" contenteditable="true" oninput="saveToLocalStorage()" id="companyName">SHREE
+                        BALAJI PLY AND HARDWARE</div>
+                    <div class="contact">
+                        <p contenteditable="true" oninput="saveToLocalStorage()" id="companyAddr">pandav nagar, phase -
+                            1, hinjewadi, pune - 411057</p>
+                        <p contenteditable="true" oninput="saveToLocalStorage()" id="companyPhone">Contact no :
+                            989014751</p>
+                        <p contenteditable="true" oninput="saveToLocalStorage()" id="companyGstin"
+                            style="display: none;">GSTIN : Your 15-digit GSTIN</p>
+                    </div>
                 </div>
             </div>
+
             <div class="customer-details">
                 <table>
                     <tr>
@@ -1160,16 +1165,18 @@
 
         <!-- GST Bill Container -->
         <div id="gst-bill-container" style="display: none">
-            <div class="company-details">
-                <div class="top-name" id="gstCompanyName">
-                    COMPANY NAME
-                </div>
-                <div class="contact">
-                    <p id="gstCompanyAddr">Address</p>
-                    <p>
-                        GSTIN : <span id="gstCompanyGstin">Your 15-digit GSTIN</span></p>
-                    <p>Contact No : <span id="gstCompanyPhone">+91 1234567890</span></p>
-                    <p>Email : <span id="gstCompanyEmail">abcd@gmil.com</span></p>
+
+            <h4 id="gst-bill-heading"
+                style="display: none; text-align: center; margin-bottom: 5px; text-transform: uppercase;"></h4>
+            <div class="company-details" id="gst-company-details">
+                <div class="company-text">
+                    <div class="top-name" id="gstCompanyName">COMPANY NAME</div>
+                    <div class="contact">
+                        <p id="gstCompanyAddr">Address</p>
+                        <p>GSTIN : <span id="gstCompanyGstin">Your 15-digit GSTIN</span></p>
+                        <p>Contact No : <span id="gstCompanyPhone">+91 1234567890</span></p>
+                        <p>Email : <span id="gstCompanyEmail">abcd@gmil.com</span></p>
+                    </div>
                 </div>
             </div>
             <!-- Updated Customer Details Section in GST Bill -->
@@ -1284,15 +1291,21 @@
                             <td>
                                 <p><strong>Amount Chargeable (in words)</strong></p>
                             </td>
-                            <td class="align-center">
-                                <p id="bill-company-signatory">for COMPANY NAME</p>
+                            <td class="align-center" colspan="2">
+                                <p id="bill-company-signatory">for SHREE BALAJI PLY AND HARDWARE</p>
                             </td>
                         </tr>
                         <tr>
                             <td>
                                 <p id="bill-amount-words">Rupees Zero Only</p>
                             </td>
-                            <td rowspan="2" style="border: 1px solid var(--border-color);"></td>
+                            <td rowspan="2"
+                                style="width: 15%; vertical-align: middle;text-align: center;"
+                                id="stamp-cell">
+                            </td>
+                            <td rowspan="2" style="width: 15%; vertical-align: middle;text-align: center;"
+                                id="signature-cell">
+                            </td>
                         </tr>
                         <tr>
                             <td class="bank-info">
@@ -1309,7 +1322,7 @@
                                 <p><small>We declare that this invoice shows the actual price of the </small></p>
                                 <p><small>goods described and that all particulars are true and correct</small></p>
                             </td>
-                            <td class="align-center" style="text-align: center;">Authorised Signatory</td>
+                            <td style="text-align:center; vertical-align: middle;" colspan="2">Authorised Signatory</td>
                         </tr>
                     </tbody>
                 </table>
@@ -1573,6 +1586,107 @@
                 <div id="restored-bills-list" class="items-list">
                     <!-- Restored bills will be loaded here -->
                 </div>
+            </div>
+        </div>
+    </div>
+    <div id="add-stock-modal" class="modal">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3>Add Stock</h3>
+                <span class="close" onclick="closeAddStockModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p id="stock-item-name" style="font-weight: bold; margin-bottom: 15px;"></p>
+                <div class="stock-input-group">
+                    <input type="number" id="add-stock-quantity" placeholder="Qty to add" min="1" step="1">
+                    <button onclick="saveAddedStock()" class="btn-apply">Add</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="bill-heading-modal" class="modal">
+        <div class="modal-content" style="max-width: 450px;">
+            <div class="modal-header">
+                <h3>Bill Headings</h3>
+                <span class="close" onclick="closeBillHeadingModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Regular Bill Heading:</label>
+                    <input type="text" id="regular-heading-input" placeholder="e.g. ESTIMATE / QUOTATION">
+                </div>
+                <div class="form-group">
+                    <label>GST Bill Heading:</label>
+                    <input type="text" id="gst-heading-input" placeholder="e.g. TAX INVOICE">
+                </div>
+
+                <div class="form-group">
+                    <label>Font Size (px):</label>
+                    <input type="number" id="heading-font-size-input" placeholder="e.g. 18" value="18">
+                </div>
+
+                <div class="form-group">
+                    <label>Text Case:</label>
+                    <select id="heading-text-transform">
+                        <option value="none">Normal</option>
+                        <option value="uppercase" selected>Uppercase</option>
+                        <option value="lowercase">Lowercase</option>
+                        <option value="capitalize">Capitalize</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeBillHeadingModal()" class="btn-cancel">Cancel</button>
+                <button onclick="saveBillHeadings()" class="btn-apply">Save Headings</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="branding-modal" class="modal">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3>Logo, Sign & Stamp</h3>
+                <span class="close" onclick="closeBrandingModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Company Logo:</label>
+                    <div id="logo-preview" class="img-preview-box"></div>
+
+                    <input type="file" id="logo-upload" accept="image/*" onchange="previewImage(this, 'logo')">
+
+                    <div style="margin-top: 10px;">
+                        <label>Logo Position:</label>
+                        <select id="logo-position">
+                            <option value="left">Left</option>
+                            <option value="right">Right</option>
+                        </select>
+                    </div>
+                    <button onclick="clearImage('logo')" class="btn-cancel"
+                        style="margin-top:5px; padding: 5px 10px; font-size: 12px;">Remove Logo</button>
+                </div>
+                <hr>
+                <div class="form-group">
+                    <label>Signature:</label>
+                    <div id="sign-preview" class="img-preview-box"></div>
+
+                    <input type="file" id="sign-upload" accept="image/*" onchange="previewImage(this, 'signature')">
+                    <button onclick="clearImage('signature')" class="btn-cancel"
+                        style="margin-top:5px; padding: 5px 10px; font-size: 12px;">Remove Signature</button>
+                </div>
+                <div class="form-group">
+                    <label>Stamp/Seal:</label>
+                    <div id="stamp-preview" class="img-preview-box"></div>
+
+                    <input type="file" id="stamp-upload" accept="image/*" onchange="previewImage(this, 'stamp')">
+                    <button onclick="clearImage('stamp')" class="btn-cancel"
+                        style="margin-top:5px; padding: 5px 10px; font-size: 12px;">Remove Stamp</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeBrandingModal()" class="btn-cancel">Cancel</button>
+                <button onclick="saveBrandingSettings()" class="btn-apply">Save Changes</button>
             </div>
         </div>
     </div>
