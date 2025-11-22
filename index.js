@@ -293,43 +293,55 @@ async function loadAutoApplySetting() {
 }
 
 // Customer Rate Suggestion System
-async function getCustomerRateSuggestion(customerName, itemName) {
+// Customer Rate & Discount Suggestion System
+// Customer Rate & Discount Suggestion System (Split Logic)
+async function getCustomerRateSuggestion(identifier, itemName) {
     try {
-        if (!customerName || !itemName) return null;
+        if (!identifier || !itemName) return null;
 
-        // Search in regular saved bills
-        const regularBills = await getAllFromDB('savedBills');
-        let suggestedRate = null;
+        let suggestedData = null;
         let latestTimestamp = 0;
 
-        // Search through all regular bills for this customer
-        regularBills.forEach(bill => {
-            if (bill.value.customer?.name === customerName && bill.value.tableStructure) {
-                bill.value.tableStructure.forEach(row => {
-                    if (row.type === 'item' &&
-                        row.itemName.toLowerCase() === itemName.toLowerCase() &&
-                        row.rate > 0 &&
-                        bill.value.timestamp > latestTimestamp) {
-
-                        suggestedRate = row.rate;
-                        latestTimestamp = bill.value.timestamp;
-                    }
-                });
-            }
-        });
-
-        // Also search in GST bills if no match found
-        if (!suggestedRate) {
+        if (isGSTMode) {
+            // GST MODE: Search by GSTIN in gstSavedBills
             const gstBills = await getAllFromDB('gstSavedBills');
             gstBills.forEach(bill => {
-                const billCustomerName = bill.value.customer?.billTo?.name;
-                if (billCustomerName === customerName && bill.value.items) {
+                // Check both Bill To and Ship To GSTINs
+                const billToGSTIN = bill.value.customer?.billTo?.gstin;
+                const shipToGSTIN = bill.value.customer?.shipTo?.gstin;
+
+                if ((billToGSTIN === identifier || shipToGSTIN === identifier) && bill.value.items) {
                     bill.value.items.forEach(item => {
                         if (item.itemName.toLowerCase() === itemName.toLowerCase() &&
                             item.rate > 0 &&
                             bill.value.timestamp > latestTimestamp) {
 
-                            suggestedRate = parseFloat(item.rate);
+                            suggestedData = {
+                                rate: parseFloat(item.rate),
+                                discountType: item.discountType || 'none',
+                                discountValue: parseFloat(item.discountValue) || 0
+                            };
+                            latestTimestamp = bill.value.timestamp;
+                        }
+                    });
+                }
+            });
+        } else {
+            // REGULAR MODE: Search by Name in savedBills
+            const regularBills = await getAllFromDB('savedBills');
+            regularBills.forEach(bill => {
+                if (bill.value.customer?.name === identifier && bill.value.tableStructure) {
+                    bill.value.tableStructure.forEach(row => {
+                        if (row.type === 'item' &&
+                            row.itemName.toLowerCase() === itemName.toLowerCase() &&
+                            row.rate > 0 &&
+                            bill.value.timestamp > latestTimestamp) {
+
+                            suggestedData = {
+                                rate: row.rate,
+                                discountType: row.discountType || 'none',
+                                discountValue: parseFloat(row.discountValue) || 0
+                            };
                             latestTimestamp = bill.value.timestamp;
                         }
                     });
@@ -337,7 +349,7 @@ async function getCustomerRateSuggestion(customerName, itemName) {
             });
         }
 
-        return suggestedRate;
+        return suggestedData;
     } catch (error) {
         console.error('Error getting customer rate suggestion:', error);
         return null;
@@ -345,13 +357,17 @@ async function getCustomerRateSuggestion(customerName, itemName) {
 }
 
 // Sync rates to all tables (input, bill view, GST view)
-function syncRateToOtherTables(itemId, newRate, newAmount) {
+function syncRateToOtherTables(itemId, newRate, newAmount, particularsHtml = null, discountType = null, discountValue = null) {
     // Sync to regular bill table (copyListManual)
     const copyRow = document.querySelector(`#copyListManual tr[data-id="${itemId}"]`);
     if (copyRow) {
         const cells = copyRow.children;
         cells[4].textContent = parseFloat(newRate).toFixed(2);
         cells[5].textContent = parseFloat(newAmount).toFixed(2);
+
+        if (particularsHtml) cells[1].innerHTML = particularsHtml;
+        if (discountType !== null) copyRow.setAttribute('data-discount-type', discountType);
+        if (discountValue !== null) copyRow.setAttribute('data-discount-value', discountValue);
     }
 
     // Sync to GST table if in GST mode
@@ -359,21 +375,46 @@ function syncRateToOtherTables(itemId, newRate, newAmount) {
         const gstRow = document.querySelector(`#gstCopyListManual tr[data-id="${itemId}"]`);
         if (gstRow) {
             const cells = gstRow.children;
-            cells[5].textContent = parseFloat(newRate).toFixed(2); // Rate column in GST table
-            cells[6].textContent = parseFloat(newAmount).toFixed(2); // Amount column in GST table
+            cells[5].textContent = parseFloat(newRate).toFixed(2); // Rate column
+            cells[6].textContent = parseFloat(newAmount).toFixed(2); // Amount column
+
+            // FIXED: Update HTML and Attributes on GST Row
+            if (particularsHtml) cells[1].innerHTML = particularsHtml;
+            if (discountType !== null) gstRow.setAttribute('data-discount-type', discountType);
+            if (discountValue !== null) gstRow.setAttribute('data-discount-value', discountValue);
         }
     }
 }
 
 // Check and apply customer-specific rates to existing items (SYNCED VERSION)
-async function checkAndApplyCustomerRates(customerName) {
-    if (!autoApplyCustomerRates) {
-        return;
-    }
+// Check and apply customer-specific rates to existing items
+async function checkAndApplyCustomerRates(paramIdentifier) {
+    if (!autoApplyCustomerRates) return;
 
     try {
+        // Determine Identifier based on Mode
+        let identifier = null;
+
+        if (isGSTMode) {
+            // GST Mode: Use GSTIN
+            // Try display element first, then input value
+            const displayGstin = document.getElementById('billToGstin').textContent.trim();
+            const inputGstin = document.getElementById('consignee-gst').value.trim();
+
+            if (displayGstin && displayGstin !== 'customer 15-digit GSTIN' && displayGstin !== 'N/A') {
+                identifier = displayGstin;
+            } else if (inputGstin) {
+                identifier = inputGstin;
+            }
+        } else {
+            // Regular Mode: Use Customer Name (from param or input)
+            identifier = paramIdentifier || document.getElementById('custName').value.trim();
+        }
+
+        if (!identifier) return;
+
         const items = document.querySelectorAll('#createListManual tbody tr[data-id]');
-        let appliedRatesCount = 0;
+        let appliedCount = 0;
 
         for (const row of items) {
             const cells = row.children;
@@ -381,12 +422,20 @@ async function checkAndApplyCustomerRates(customerName) {
             const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim();
 
             if (itemName) {
-                const suggestedRate = await getCustomerRateSuggestion(customerName, itemName);
-                if (suggestedRate) {
-                    // Update the rate in the input table
-                    cells[4].textContent = parseFloat(suggestedRate).toFixed(2);
+                const suggestion = await getCustomerRateSuggestion(identifier, itemName);
 
-                    // Recalculate amount
+                if (suggestion) {
+                    const { rate: suggestedRate, discountType, discountValue } = suggestion;
+
+                    // 1. Update Rate
+                    cells[4].textContent = parseFloat(suggestedRate).toFixed(2);
+                    row.setAttribute('data-rate', parseFloat(suggestedRate).toFixed(8));
+
+                    // 2. Update Discount Attributes
+                    row.setAttribute('data-discount-type', discountType);
+                    row.setAttribute('data-discount-value', discountValue);
+
+                    // 3. Recalculate Amount
                     const quantity = parseFloat(row.getAttribute('data-original-quantity') || cells[2].textContent);
                     const dimensionType = row.getAttribute('data-dimension-type') || 'none';
 
@@ -399,33 +448,62 @@ async function checkAndApplyCustomerRates(customerName) {
                         finalQuantity = quantity / 12;
                     }
 
-                    const newAmount = finalQuantity * suggestedRate;
-                    cells[5].textContent = newAmount.toFixed(2);
+                    let baseAmount = finalQuantity * suggestedRate;
+                    let discountAmount = 0;
 
-                    // Update data attributes (THIS PERSISTS THE RATES)
-                    row.setAttribute('data-rate', suggestedRate.toFixed(8));
-                    row.setAttribute('data-amount', newAmount.toFixed(8));
+                    if (discountType !== 'none' && discountValue > 0) {
+                        switch (discountType) {
+                            case 'percent_per_unit':
+                                const discountPerUnit = suggestedRate * (discountValue / 100);
+                                discountAmount = discountPerUnit * finalQuantity;
+                                break;
+                            case 'amt_per_unit':
+                                discountAmount = discountValue * finalQuantity;
+                                break;
+                            case 'percent_on_amount':
+                                discountAmount = baseAmount * (discountValue / 100);
+                                break;
+                            case 'amt_on_amount':
+                                discountAmount = discountValue;
+                                break;
+                        }
+                    }
 
-                    // SYNC TO BILL VIEW TABLES
-                    syncRateToOtherTables(row.getAttribute('data-id'), suggestedRate, newAmount);
+                    const finalAmount = storeWithPrecision(baseAmount - discountAmount);
+                    const safeFinalAmount = finalAmount < 0 ? 0 : finalAmount;
 
-                    appliedRatesCount++;
+                    cells[5].textContent = safeFinalAmount.toFixed(2);
+                    row.setAttribute('data-amount', safeFinalAmount.toFixed(8));
+
+                    // 4. Regenerate Particulars Text
+                    const notes = particularsDiv.querySelector('.notes')?.textContent || '';
+                    const storedDimValues = JSON.parse(row.getAttribute('data-dimension-values') || '[0,0,0]');
+                    const storedDimUnit = row.getAttribute('data-dimension-unit') || 'ft';
+                    const storedUnit = cells[3].textContent;
+                    const storedToggles = JSON.parse(row.getAttribute('data-dimension-toggles') || '{"toggle1":true,"toggle2":true,"toggle3":true}');
+
+                    const dimDisplayText = getDimensionDisplayText(dimensionType, storedDimValues, storedDimUnit, storedToggles);
+
+                    const particularsHtml = formatParticularsManual(
+                        itemName, notes, dimDisplayText, quantity, finalQuantity, suggestedRate,
+                        dimensionType, storedDimUnit, storedUnit, discountType, discountValue, storedToggles
+                    );
+
+                    cells[1].innerHTML = particularsHtml;
+
+                    // 5. Sync
+                    syncRateToOtherTables(row.getAttribute('data-id'), suggestedRate, safeFinalAmount, particularsHtml, discountType, discountValue);
+
+                    appliedCount++;
                 }
             }
         }
 
-        // Update totals after applying rates
-        updateTotal();
-        if (isGSTMode) {
-            updateGSTTaxCalculation();
-        }
-
-        // Save to localStorage to persist the changes
-        await saveToLocalStorage();
-
-        // Show notification only once if rates were applied
-        if (appliedRatesCount > 0) {
-            showNotification(`Applied previous rates for ${customerName} (${appliedRatesCount} items)`, 'info', 3000);
+        if (appliedCount > 0) {
+            updateTotal();
+            if (isGSTMode) updateGSTTaxCalculation();
+            await saveToLocalStorage();
+            showNotification(`Applied previous rates for ${identifier}`, 'info', 3000);
         }
 
     } catch (error) {
@@ -779,6 +857,10 @@ document.addEventListener('DOMContentLoaded', async function () {
         await loadTaxSettings();
         // await loadSavedItems();
         await loadSavedCustomers();
+        // ADD THIS LINE:
+        await loadBillHeadings();
+        // ADD THIS LINE:
+        await loadBrandingSettings();
 
         // Load GST mode settings
         const gstModeSetting = await getFromDB('gstMode', 'isGSTMode');
@@ -1436,12 +1518,6 @@ async function handleItemSearch() {
     const searchTerm = document.getElementById('itemNameManual').value.trim();
     const suggestions = document.getElementById('item-suggestions');
 
-    // Debug: Check if elements exist
-    if (!suggestions) {
-        console.error('item-suggestions element not found');
-        return;
-    }
-
     if (searchTerm.length < 1) {
         suggestions.style.display = 'none';
         return;
@@ -1466,7 +1542,11 @@ async function handleItemSearch() {
         filtered.forEach(item => {
             const div = document.createElement('div');
             div.className = 'item-suggestion-item';
-            div.textContent = item.value.name;
+
+            // ADD STOCK DISPLAY
+            const stockText = item.value.stockQuantity !== undefined ? ` ( Stock : ${item.value.stockQuantity} )` : '';
+            div.textContent = item.value.name + stockText;
+
             div.onclick = () => selectItemSuggestion(item.value.name);
             suggestions.appendChild(div);
         });
@@ -1492,61 +1572,83 @@ async function handleItemNameInput() {
     if (!itemName) return;
 
     try {
-        // First, try exact match with original item name
         let item = await getFromDB('savedItems', itemName);
 
-        // If no exact match, search through other names
         if (!item) {
             const allItems = await getAllFromDB('savedItems');
             item = allItems.find(savedItem => {
                 if (!savedItem.value.otherNames) return false;
-
-                // Split other names by comma and check if any match
                 const otherNames = savedItem.value.otherNames.split(',').map(name => name.trim().toLowerCase());
                 return otherNames.includes(itemName.toLowerCase());
             })?.value;
         }
 
         if (item) {
-            // Populate all manual item container fields
             document.getElementById('dimensionType').value = item.dimensionType || 'none';
             document.getElementById('quantityManual').value = item.defaultQuantity || 1;
             document.getElementById('selectUnit').value = item.defaultUnit || '';
-
-            // CHECK FOR CUSTOMER-SPECIFIC RATE FIRST (only if auto-apply is enabled)
-            const customerName = document.getElementById('custName').value.trim();
-            let suggestedRate = null;
-
-            if (customerName && autoApplyCustomerRates) {
-                suggestedRate = await getCustomerRateSuggestion(customerName, itemName);
-            }
-
-            // Use customer-specific rate if available, otherwise use default rate
-            document.getElementById('rateManual').value = suggestedRate || item.defaultRate || '';
-
             document.getElementById('itemNotesManual').value = item.notes || '';
-
-            // Populate HSN and product code fields
             document.getElementById('hsnCodeManual').value = item.hsnCode || '';
             document.getElementById('productCodeManual').value = item.productCode || '';
 
-            // Populate discount fields
-            document.getElementById('discountType').value = item.discountType || 'none';
-            document.getElementById('discountValue').value = item.discountValue || '';
-
-            // Populate dimension values in manual container - ensure they are numbers
             if (item.dimensionValues) {
                 document.getElementById('dimension1').value = parseFloat(item.dimensionValues[0]) || '';
                 document.getElementById('dimension2').value = parseFloat(item.dimensionValues[1]) || '';
                 document.getElementById('dimension3').value = parseFloat(item.dimensionValues[2]) || '';
-            } else {
-                // Clear dimension values if none exist
-                document.getElementById('dimension1').value = '';
-                document.getElementById('dimension2').value = '';
-                document.getElementById('dimension3').value = '';
             }
 
-            // Update currentDimensions object with the loaded values
+            // --- NEW LOGIC: Determine Identifier based on Mode ---
+            let identifier = null;
+            if (isGSTMode) {
+                // GST Mode: Use GSTIN from display or input
+                const displayGstin = document.getElementById('billToGstin').textContent.trim();
+                const inputGstin = document.getElementById('consignee-gst').value.trim();
+                if (displayGstin && displayGstin !== 'customer 15-digit GSTIN' && displayGstin !== 'N/A') {
+                    identifier = displayGstin;
+                } else if (inputGstin) {
+                    identifier = inputGstin;
+                }
+            } else {
+                // Regular Mode: Use Name
+                identifier = document.getElementById('custName').value.trim();
+            }
+
+            let suggestedData = null;
+            if (identifier && autoApplyCustomerRates) {
+                suggestedData = await getCustomerRateSuggestion(identifier, itemName);
+            }
+
+            const discountContainer = document.getElementById('discount-inputs-container');
+            const discountBtn = document.getElementById('toggleDiscountBtn');
+
+            if (suggestedData) {
+                // Apply History Data
+                document.getElementById('rateManual').value = suggestedData.rate;
+                document.getElementById('discountType').value = suggestedData.discountType;
+                document.getElementById('discountValue').value = suggestedData.discountValue;
+
+                if (suggestedData.discountType !== 'none' && suggestedData.discountValue > 0) {
+                    discountContainer.style.display = 'flex';
+                    discountBtn.style.backgroundColor = '#27ae60';
+                } else {
+                    discountContainer.style.display = 'none';
+                    discountBtn.style.backgroundColor = '';
+                }
+            } else {
+                // Fallback to Item Defaults
+                document.getElementById('rateManual').value = item.defaultRate || '';
+                document.getElementById('discountType').value = item.discountType || 'none';
+                document.getElementById('discountValue').value = item.discountValue || '';
+
+                if (item.discountType && item.discountType !== 'none' && item.discountValue) {
+                    discountContainer.style.display = 'flex';
+                    discountBtn.style.backgroundColor = '#27ae60';
+                } else {
+                    discountContainer.style.display = 'none';
+                    discountBtn.style.backgroundColor = '';
+                }
+            }
+
             currentDimensions.type = item.dimensionType || 'none';
             currentDimensions.unit = item.measurementUnit || 'ft';
             if (item.dimensionValues) {
@@ -1559,29 +1661,21 @@ async function handleItemNameInput() {
                 currentDimensions.values = [0, 0, 0];
             }
 
-            // Set measurement unit and handle dimension type change to show/hide appropriate inputs
             document.getElementById('measurementUnit').value = item.measurementUnit || 'ft';
-
-            // Force the dimension type change handler to update UI visibility
             handleDimensionTypeChange();
-
-            // Re-calculate dimensions after all values are set
             calculateDimensions();
 
-            // REMOVED THE NOTIFICATION FROM HERE - it was causing duplicates
-
-            // AUTO-SHOW RELEVANT SECTIONS BASED ON ITEM DATA
-            if (item.discountType && item.discountType !== 'none' && item.discountValue) {
-                document.getElementById('discount-inputs-container').style.display = 'flex';
-                document.getElementById('toggleDiscountBtn').style.backgroundColor = '#27ae60';
-            }
+            const dimensionContainer = document.getElementById('dimension-inputs-container');
+            const dimensionBtn = document.getElementById('toggleDimensionBtn');
 
             if (item.dimensionType && item.dimensionType !== 'none') {
-                document.getElementById('dimension-inputs-container').style.display = 'flex';
-                document.getElementById('toggleDimensionBtn').style.backgroundColor = '#3498db';
+                dimensionContainer.style.display = 'flex';
+                dimensionBtn.style.backgroundColor = '#3498db';
+            } else {
+                dimensionContainer.style.display = 'none';
+                dimensionBtn.style.backgroundColor = '';
             }
 
-            // Focus on next field for quick editing
             document.getElementById('quantityManual').focus();
         }
     } catch (error) {
@@ -1610,15 +1704,24 @@ function openAddItemModal() {
 
     // Reset all fields
     document.getElementById('saved-item-name').value = '';
+    document.getElementById('saved-stock-quantity').value = '0';
     document.getElementById('saved-dimension-type').value = 'none';
     document.getElementById('saved-measurement-unit').value = 'ft';
     document.getElementById('saved-default-quantity').value = '1';
     document.getElementById('saved-select-unit').value = '';
     document.getElementById('saved-default-rate').value = '';
-    document.getElementById('saved-show-dimensions').checked = true;
+    // Removed checkbox reset
     document.getElementById('saved-dimension1').value = '';
     document.getElementById('saved-dimension2').value = '';
     document.getElementById('saved-dimension3').value = '';
+
+    document.getElementById('saved-hsn-code').value = '';
+    document.getElementById('saved-product-code').value = '';
+    document.getElementById('saved-purchase-rate').value = '';
+    document.getElementById('saved-discount-type').value = 'none';
+    document.getElementById('saved-discount-value').value = '';
+    document.getElementById('saved-other-names').value = '';
+    document.getElementById('saved-notes').value = '';
 
     // Reset dimension inputs visibility
     handleSavedDimensionTypeChange();
@@ -1889,16 +1992,15 @@ async function editItem(itemName) {
             document.getElementById('add-item-modal-title').textContent = 'Edit Item';
             document.getElementById('save-item-btn').textContent = 'Update Item';
 
-            // Populate all fields
+            // Populate fields
             document.getElementById('saved-item-name').value = item.name;
-            // Add stock quantity field
             document.getElementById('saved-stock-quantity').value = item.stockQuantity || 0;
             document.getElementById('saved-dimension-type').value = item.dimensionType || 'none';
             document.getElementById('saved-measurement-unit').value = item.measurementUnit || 'ft';
             document.getElementById('saved-default-quantity').value = item.defaultQuantity || 1;
             document.getElementById('saved-select-unit').value = item.defaultUnit || '';
             document.getElementById('saved-default-rate').value = item.defaultRate || '';
-            document.getElementById('saved-show-dimensions').checked = item.showDimensions !== false;
+            // Removed checkbox population
 
             // Populate dimension values
             if (item.dimensionValues) {
@@ -1906,7 +2008,6 @@ async function editItem(itemName) {
                 document.getElementById('saved-dimension2').value = parseFloat(item.dimensionValues[1]) || '';
                 document.getElementById('saved-dimension3').value = parseFloat(item.dimensionValues[2]) || '';
             } else {
-                // Clear dimension values if none exist
                 document.getElementById('saved-dimension1').value = '';
                 document.getElementById('saved-dimension2').value = '';
                 document.getElementById('saved-dimension3').value = '';
@@ -1918,26 +2019,20 @@ async function editItem(itemName) {
                 document.getElementById('saved-dimension2-toggle').checked = item.dimensionToggles.toggle2 !== false;
                 document.getElementById('saved-dimension3-toggle').checked = item.dimensionToggles.toggle3 !== false;
             } else {
-                // Default to checked if no toggle states exist
                 document.getElementById('saved-dimension1-toggle').checked = true;
                 document.getElementById('saved-dimension2-toggle').checked = true;
                 document.getElementById('saved-dimension3-toggle').checked = true;
             }
 
-            // Populate discount fields
             document.getElementById('saved-discount-type').value = item.discountType || 'none';
             document.getElementById('saved-discount-value').value = item.discountValue || '';
-
-            // Populate HSN and product fields
             document.getElementById('saved-hsn-code').value = item.hsnCode || '';
             document.getElementById('saved-product-code').value = item.productCode || '';
             document.getElementById('saved-purchase-rate').value = item.purchaseRate || '';
             document.getElementById('saved-other-names').value = item.otherNames || '';
             document.getElementById('saved-notes').value = item.notes || '';
 
-            // Handle dimension type change to show/hide appropriate inputs
             handleSavedDimensionTypeChange();
-
             document.getElementById('add-item-modal').style.display = 'block';
         }
     } catch (error) {
@@ -1953,27 +2048,30 @@ async function saveItem() {
     const defaultQuantity = parseFloat(document.getElementById('saved-default-quantity').value) || 1;
     const defaultUnit = document.getElementById('saved-select-unit').value.trim();
     const defaultRate = parseFloat(document.getElementById('saved-default-rate').value) || 0;
-    const showDimensions = document.getElementById('saved-show-dimensions').checked;
 
-    // Get stock quantity - ADD THIS LINE
-    const stockQuantity = parseInt(document.getElementById('saved-stock-quantity').value) || 0;
+    // Default showDimensions to true since checkbox is removed
+    const showDimensions = true;
 
-    // Get discount fields
     const discountType = document.getElementById('saved-discount-type').value;
     const discountValue = parseFloat(document.getElementById('saved-discount-value').value) || 0;
-
-    // Get HSN and product fields
     const hsnCode = document.getElementById('saved-hsn-code').value.trim();
+    const stockQuantity = parseInt(document.getElementById('saved-stock-quantity').value) || 0;
     const productCode = document.getElementById('saved-product-code').value.trim();
     const purchaseRate = parseFloat(document.getElementById('saved-purchase-rate').value) || 0;
     const otherNames = document.getElementById('saved-other-names').value.trim();
     const notes = document.getElementById('saved-notes').value.trim();
 
-    // Get dimension values
     const dimension1 = parseFloat(document.getElementById('saved-dimension1').value) || 0;
     const dimension2 = parseFloat(document.getElementById('saved-dimension2').value) || 0;
     const dimension3 = parseFloat(document.getElementById('saved-dimension3').value) || 0;
     const dimensionValues = [dimension1, dimension2, dimension3];
+
+    // Capture toggle states
+    const toggleStates = {
+        toggle1: document.getElementById('saved-dimension1-toggle').checked,
+        toggle2: document.getElementById('saved-dimension2-toggle').checked,
+        toggle3: document.getElementById('saved-dimension3-toggle').checked
+    };
 
     if (!itemName) {
         showNotification('Please enter an item name');
@@ -1985,16 +2083,14 @@ async function saveItem() {
         dimensionType: dimensionType,
         measurementUnit: measurementUnit,
         dimensionValues: dimensionValues,
+        dimensionToggles: toggleStates,
         defaultQuantity: defaultQuantity,
         defaultUnit: defaultUnit,
         defaultRate: defaultRate,
         showDimensions: showDimensions,
-        // Add stock quantity to the item data
         stockQuantity: stockQuantity,
-        // Add discount fields
         discountType: discountType,
         discountValue: discountValue,
-        // Add other fields
         hsnCode: hsnCode,
         productCode: productCode,
         purchaseRate: purchaseRate,
@@ -2004,13 +2100,20 @@ async function saveItem() {
     };
 
     try {
+        // Handle renaming: if editing and name changed, delete old entry
+        if (currentlyEditingItemId && currentlyEditingItemId !== itemName) {
+            await removeFromDB('savedItems', currentlyEditingItemId);
+        }
+
         await setInDB('savedItems', itemName, itemData);
         closeAddItemModal();
         await loadItemsList();
+        showNotification('Item saved successfully', 'success');
     } catch (error) {
         console.error('Error saving item:', error);
     }
 }
+
 // Batch Invoice Functions
 function openBatchInvoiceModal() {
     toggleSettingsSidebar();
@@ -2181,9 +2284,6 @@ async function loadItemsList() {
         const itemsList = document.getElementById('items-list');
         itemsList.innerHTML = '';
 
-        // DEBUG: Log all items to see what's in the database
-        console.log('All items from DB:', items);
-
         if (items.length === 0) {
             itemsList.innerHTML = '<div class="item-card">No items saved yet</div>';
             return;
@@ -2193,76 +2293,67 @@ async function loadItemsList() {
             const itemCard = document.createElement('div');
             itemCard.className = 'item-card';
 
-            // DEBUG: Log each item to see its structure
-            console.log('Item data:', item);
-
-            // Show dimension values in the item list
+            // 1. Handle Dimension Info & Unit
             let dimensionInfo = '';
-            if (item.value.dimensionValues && item.value.dimensionType !== 'none' && item.value.dimensionType !== 'dozen') {
-                const [v1, v2, v3] = item.value.dimensionValues;
-                dimensionInfo = `<div>Dimension Values: ${v1}, ${v2}, ${v3} ${item.value.measurementUnit || 'ft'}</div>`;
+            let unitInfo = '';
+            if (item.value.dimensionType && item.value.dimensionType !== 'none') {
+                dimensionInfo += `<div>Dimension Type: ${item.value.dimensionType}</div>`;
+
+                // Only show Unit if dimensions are active
+                unitInfo = `<div>Measurement Unit: ${item.value.measurementUnit || 'ft'}</div>`;
+
+                if (item.value.dimensionValues) {
+                    const [v1, v2, v3] = item.value.dimensionValues;
+                    dimensionInfo += `<div>Dimension Values: ${v1}, ${v2}, ${v3}</div>`;
+                }
             }
 
-            // FIXED: Better stock display logic
+            // 2. Handle Stock
             let stockInfo = '';
-            // Check if stockQuantity exists (including 0)
             if (item.value.stockQuantity !== undefined && item.value.stockQuantity !== null) {
                 stockInfo = `<div>Stock: ${item.value.stockQuantity}</div>`;
             }
 
-            // Show other names if available
-            let otherNamesInfo = '';
-            if (item.value.otherNames) {
-                otherNamesInfo = `<div>Other Names: ${item.value.otherNames}</div>`;
-            }
-
-            // Show discount info if available
+            // 3. Handle Discount (Hide if none)
             let discountInfo = '';
             if (item.value.discountType && item.value.discountType !== 'none') {
                 discountInfo = `<div>Discount: ${item.value.discountType} - ${item.value.discountValue}</div>`;
             }
 
-            // Show HSN/SAC info if available
-            let hsnInfo = '';
-            if (item.value.hsnCode) {
-                hsnInfo = `<div>HSN/SAC: ${item.value.hsnCode}</div>`;
+            // 4. Handle Notes (Hide if None/Empty)
+            let notesInfo = '';
+            if (item.value.notes && item.value.notes !== 'None' && item.value.notes.trim() !== '') {
+                notesInfo = `<div>Notes: ${item.value.notes}</div>`;
             }
 
-            // Show product code info if available
-            let productCodeInfo = '';
-            if (item.value.productCode) {
-                productCodeInfo = `<div>Product Code: ${item.value.productCode}</div>`;
-            }
-
-            // Show purchase rate info if available
-            let purchaseRateInfo = '';
-            if (item.value.purchaseRate) {
-                purchaseRateInfo = `<div>Purchase Rate: ₹${item.value.purchaseRate}</div>`;
-            }
+            // 5. Other Fields
+            let otherNamesInfo = item.value.otherNames ? `<div>Other Names: ${item.value.otherNames}</div>` : '';
+            let hsnInfo = item.value.hsnCode ? `<div>HSN/SAC: ${item.value.hsnCode}</div>` : '';
+            let productCodeInfo = item.value.productCode ? `<div>Product Code: ${item.value.productCode}</div>` : '';
+            let purchaseRateInfo = item.value.purchaseRate ? `<div>Purchase Rate: ₹${item.value.purchaseRate}</div>` : '';
 
             itemCard.innerHTML = `
                 <div class="item-header">
                     <div class="item-name">${item.value.name}</div>
                     <div class="item-actions">
+                        <button class="btn-add-stock" onclick="openAddStockModal('${item.value.name}')">Add Stock</button>
                         <button class="btn-edit" onclick="editItem('${item.value.name}')">Edit</button>
                         <button class="btn-delete" onclick="deleteItem('${item.value.name}')">Delete</button>
                     </div>
                 </div>
                 <div class="item-details">
-                    <div>Dimension Type: ${item.value.dimensionType}</div>
-                    <div>Measurement Unit: ${item.value.measurementUnit || 'N/A'}</div>
                     ${dimensionInfo}
+                    ${unitInfo}
                     <div>Default Quantity: ${item.value.defaultQuantity || 1}</div>
                     <div>Default Unit: ${item.value.defaultUnit}</div>
                     <div>Default Rate: ₹${item.value.defaultRate}</div>
-                    ${hsnInfo}
                     ${stockInfo}
                     ${productCodeInfo}
+                    ${hsnInfo}
                     ${purchaseRateInfo}
                     ${discountInfo}
                     ${otherNamesInfo}
-                    <div>Notes: ${item.value.notes || 'None'}</div>
-                    <div>Show Dimensions: ${item.value.showDimensions ? 'Yes' : 'No'}</div>
+                    ${notesInfo}
                 </div>
             `;
             itemsList.appendChild(itemCard);
@@ -3131,7 +3222,7 @@ async function addRowManual() {
     const row1 = createTableRowManual(
         id,
         itemName,
-        calculatedQuantity.toFixed(8),
+        originalQuantity.toFixed(8),
         unit,
         rate,
         finalAmount,
@@ -3150,17 +3241,18 @@ async function addRowManual() {
         currentDimUnit,
         hsnCode,
         productCode,
-        discountType,
-        discountValue
+        discountType,  // ADDED: Pass discount type
+        discountValue  // ADDED: Pass discount value
     );
 
     // Store amount with high precision
     row1.setAttribute('data-amount', storeWithPrecision(finalAmount));
     row1.setAttribute('data-rate', storeWithPrecision(rate));
+
     const row2 = createTableRowManual(
         id,
         itemName,
-        calculatedQuantity.toFixed(8),
+        originalQuantity.toFixed(8),
         unit,
         rate,
         finalAmount,
@@ -3179,8 +3271,8 @@ async function addRowManual() {
         currentDimUnit,
         hsnCode,
         productCode,
-        discountType,
-        discountValue
+        discountType,  // ADDED: Pass discount type
+        discountValue  // ADDED: Pass discount value
     );
 
     document.getElementById("createListManual").querySelector('tbody').appendChild(row1);
@@ -3788,30 +3880,26 @@ function createTableRowManual(id, itemName, quantity, unit, rate, amount, notes,
     return tr;
 }
 
-function createGSTTableRowManual(id, itemName, quantity, unit, rate, amount, notes, dimensions, editable, finalQuantity = 0, dimensionType = 'none', originalQuantity = 0, dimensionValues = [0, 0, 0], dimensionUnit = 'ft', hsnCode = '', productCode = '') {
+function createGSTTableRowManual(id, itemName, quantity, unit, rate, amount, notes, dimensions, editable, finalQuantity = 0, dimensionType = 'none', originalQuantity = 0, dimensionValues = [0, 0, 0], dimensionUnit = 'ft', hsnCode = '', productCode = '', discountType = 'none', discountValue = '') {
     const tr = document.createElement("tr");
     tr.setAttribute("data-id", id);
 
-    // FIX: Format display quantity - remove .00 if whole number
     const displayQuantity = parseFloat(originalQuantity > 0 ? originalQuantity : quantity);
-    const formattedDisplayQuantity = displayQuantity % 1 === 0 ?
-        displayQuantity.toString() :
-        displayQuantity.toFixed(2);
+    const formattedDisplayQuantity = displayQuantity % 1 === 0 ? displayQuantity.toString() : displayQuantity.toFixed(2);
 
-    // SAFELY handle rate conversion to number
     const numericRate = typeof rate === 'string' ? parseFloat(rate) : Number(rate);
     const numericAmount = typeof amount === 'string' ? parseFloat(amount) : Number(amount);
 
-    let particularsHtml = formatParticularsManual(itemName, notes, dimensions, displayQuantity, finalQuantity, numericRate, dimensionType, dimensionUnit, unit);
+    // FIXED: Pass discount params to format function
+    let particularsHtml = formatParticularsManual(itemName, notes, dimensions, displayQuantity, finalQuantity, numericRate, dimensionType, dimensionUnit, unit, discountType, discountValue);
 
     const removeFn = `removeRowManual('${id}', true)`;
 
-    // Updated order: Particulars first, then HSN/SAC
     tr.innerHTML = `
     <td class="sr-no"></td>
     <td>${particularsHtml}</td>
     <td>${hsnCode}</td>
-    <td>${formattedDisplayQuantity}</td>  <!-- FIXED: Using formatted quantity -->
+    <td>${formattedDisplayQuantity}</td>
     <td>${unit}</td>
     <td>${numericRate.toFixed(2)}</td>
     <td class="amount">${numericAmount.toFixed(2)}</td>
@@ -3823,6 +3911,11 @@ function createGSTTableRowManual(id, itemName, quantity, unit, rate, amount, not
     tr.setAttribute('data-dimension-unit', dimensionUnit);
     tr.setAttribute('data-original-quantity', displayQuantity.toFixed(8));
     tr.setAttribute('data-hsn', hsnCode);
+
+    // FIXED: Set Discount Attributes
+    tr.setAttribute('data-discount-type', discountType);
+    tr.setAttribute('data-discount-value', discountValue);
+
     if (productCode) {
         tr.setAttribute('data-product-code', productCode);
     }
@@ -3909,9 +4002,15 @@ function editRowManual(id) {
     document.getElementById("hsnCodeManual").value = hsnCode;
     document.getElementById("productCodeManual").value = productCode;
 
-    // Populate discount fields
+    // POPULATE DISCOUNT FIELDS - THIS IS THE FIX
     document.getElementById("discountType").value = discountType;
     document.getElementById("discountValue").value = discountValue;
+
+    // SHOW DISCOUNT INPUTS IF DISCOUNT EXISTS
+    if (discountType !== 'none' && discountValue > 0) {
+        document.getElementById("discount-inputs-container").style.display = 'flex';
+        document.getElementById("toggleDiscountBtn").style.backgroundColor = '#27ae60';
+    }
 
     document.getElementById('dimensionType').value = dimensionType;
     handleDimensionTypeChange();
@@ -6821,6 +6920,7 @@ window.onclick = function (event) {
     const historyModal = document.getElementById('history-modal');
     const clearHistoryModal = document.getElementById('clear-history-modal');
     const batchInvoiceModal = document.getElementById('batch-invoice-modal');
+    const billHeadingModal = document.getElementById('bill-heading-modal');
 
     // ADD THIS LINE: Get section modal
     const sectionModal = document.getElementById('section-modal');
@@ -6864,6 +6964,17 @@ window.onclick = function (event) {
     // ADD THIS: Handle restored bills modal click
     if (event.target == restoredBillsModal) {
         closeRestoredBillsModal();
+    }
+    const addStockModal = document.getElementById('add-stock-modal');
+    if (event.target == addStockModal) {
+        closeAddStockModal();
+    }
+    if (event.target == billHeadingModal) {
+        closeBillHeadingModal();
+    }
+    const brandingModal = document.getElementById('branding-modal');
+    if (event.target == brandingModal) {
+        closeBrandingModal();
     }
 }
 
@@ -8223,7 +8334,7 @@ async function getGSTBillData() {
             gstPercent: currentGSTPercent,
             discountPercent: discountPercent
         },
-        tableStructure: [], // ADD THIS LINE - SAVE SECTIONS AND ITEMS IN ORDER
+        tableStructure: [],
         items: [],
         totals: {
             subtotal: parseFloat(document.getElementById('gst-sub-total').textContent) || 0,
@@ -8235,14 +8346,11 @@ async function getGSTBillData() {
         }
     };
 
-    // ADD THIS BLOCK: Save complete table structure (sections + items in order)
     document.querySelectorAll('#gstCopyListManual tbody tr').forEach(row => {
         if (row.classList.contains('section-row')) {
             // Save section data
             const sectionId = row.getAttribute('data-section-id');
             const cell = row.querySelector('td');
-
-            // Extract section name (without any button text)
             let sectionName = '';
             for (let node of cell.childNodes) {
                 if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
@@ -8264,7 +8372,7 @@ async function getGSTBillData() {
             const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
             const notes = particularsDiv.querySelector('.notes')?.textContent || '';
 
-            data.tableStructure.push({
+            const itemObj = {
                 type: 'item',
                 id: row.getAttribute('data-id'),
                 itemName: itemName,
@@ -8273,20 +8381,20 @@ async function getGSTBillData() {
                 unit: cells[4].textContent,
                 rate: parseFloat(cells[5].textContent).toFixed(2),
                 amount: parseFloat(cells[6].textContent).toFixed(2),
-                notes: notes
-            });
+                notes: notes,
+                // FIXED: Save Discount Data
+                discountType: row.getAttribute('data-discount-type') || 'none',
+                discountValue: row.getAttribute('data-discount-value') || 0,
+                // Save Dimension Data for reconstruction
+                dimensionType: row.getAttribute('data-dimension-type') || 'none',
+                dimensionValues: JSON.parse(row.getAttribute('data-dimension-values') || '[0,0,0]'),
+                dimensionUnit: row.getAttribute('data-dimension-unit') || 'ft',
+                originalQuantity: row.getAttribute('data-original-quantity'),
+                particularsHtml: particularsDiv.innerHTML
+            };
 
-            // Also add to items array for backward compatibility
-            data.items.push({
-                id: row.getAttribute('data-id'),
-                itemName: itemName,
-                hsn: row.getAttribute('data-hsn') || '',
-                quantity: cells[3].textContent,
-                unit: cells[4].textContent,
-                rate: parseFloat(cells[5].textContent).toFixed(2),
-                amount: parseFloat(cells[6].textContent).toFixed(2),
-                notes: notes
-            });
+            data.tableStructure.push(itemObj);
+            data.items.push(itemObj);
         }
     });
 
@@ -8981,6 +9089,7 @@ async function saveCustomerDetails() {
     document.getElementById('billToState').textContent = document.getElementById('consignee-state').value;
     document.getElementById('billToStateCode').textContent = document.getElementById('consignee-code').value;
     document.getElementById('billToContact').textContent = document.getElementById('consignee-contact').value || '';
+
     // Update ship to details if applicable
     const shipToDiv = document.getElementById('shipTo');
     if (customerType === 'both') {
@@ -8999,6 +9108,16 @@ async function saveCustomerDetails() {
     // Update transaction type and GST percent
     transactionType = document.getElementById('transaction_type').value;
     currentGSTPercent = gstPercent;
+
+    // --- NEW: Auto-apply rates based on the entered GSTIN ---
+    // This fixes the issue where adding items first then customer didn't apply rates
+    if (autoApplyCustomerRates) {
+        const gstin = document.getElementById('consignee-gst').value.trim();
+        if (gstin) {
+            await checkAndApplyCustomerRates(gstin);
+        }
+    }
+    // -------------------------------------------------------
 
     // Save customer dialog state before closing
     await saveCustomerDialogState();
@@ -12368,3 +12487,320 @@ async function populateGSTCustomerDetailsFromLegacy(billData) {
 
     await populateGSTCustomerDetails(gstCustomerData);
 }
+
+// add stock
+// Global variable to track which item we are adding stock to
+let currentItemForStock = null;
+
+function openAddStockModal(itemName) {
+    currentItemForStock = itemName;
+    document.getElementById('stock-item-name').textContent = itemName;
+    document.getElementById('add-stock-quantity').value = ''; // Clear previous input
+
+    document.getElementById('add-stock-modal').style.display = 'block';
+
+    // Auto-focus the input field for better UX
+    setTimeout(() => {
+        document.getElementById('add-stock-quantity').focus();
+    }, 100);
+}
+
+function closeAddStockModal() {
+    document.getElementById('add-stock-modal').style.display = 'none';
+    currentItemForStock = null;
+}
+
+async function saveAddedStock() {
+    const input = document.getElementById('add-stock-quantity');
+    const quantityToAdd = parseFloat(input.value);
+
+    if (!currentItemForStock) return;
+
+    if (isNaN(quantityToAdd) || quantityToAdd <= 0) {
+        showNotification('Please enter a valid quantity greater than 0', 'error');
+        input.style.borderColor = 'red';
+        return;
+    }
+
+    try {
+        // 1. Get current item data
+        const item = await getFromDB('savedItems', currentItemForStock);
+
+        if (item) {
+            // 2. Calculate new stock
+            // Use 0 if stockQuantity is undefined/null
+            const currentStock = parseFloat(item.stockQuantity) || 0;
+            const newStock = currentStock + quantityToAdd;
+
+            // 3. Update item object
+            item.stockQuantity = newStock;
+
+            // 4. Save back to DB
+            await setInDB('savedItems', currentItemForStock, item);
+
+            // 5. Success feedback and UI update
+            showNotification(`Stock updated! New Total: ${newStock}`, 'success');
+            closeAddStockModal();
+            await loadItemsList(); // Refresh the list to see the new stock number
+        } else {
+            showNotification('Item not found in database', 'error');
+        }
+    } catch (error) {
+        console.error('Error updating stock:', error);
+        showNotification('Error updating stock', 'error');
+    }
+}
+
+// Bill Heading Functions
+// Bill Heading Functions
+function openBillHeadingModal() {
+    // Load current values from DOM
+    const regHeading = document.getElementById('regular-bill-heading').textContent;
+    const gstHeading = document.getElementById('gst-bill-heading').textContent;
+
+    // Get current styles (Default to 18px and Uppercase if not set)
+    const currentFontSize = parseInt(document.getElementById('regular-bill-heading').style.fontSize) || 18;
+    const currentTransform = document.getElementById('regular-bill-heading').style.textTransform || 'uppercase';
+
+    document.getElementById('regular-heading-input').value = regHeading;
+    document.getElementById('gst-heading-input').value = gstHeading;
+    document.getElementById('heading-font-size-input').value = currentFontSize;
+    document.getElementById('heading-text-transform').value = currentTransform;
+
+    document.getElementById('bill-heading-modal').style.display = 'block';
+    toggleSettingsSidebar(); // Close sidebar
+}
+
+function closeBillHeadingModal() {
+    document.getElementById('bill-heading-modal').style.display = 'none';
+}
+
+async function saveBillHeadings() {
+    const regHeadingText = document.getElementById('regular-heading-input').value.trim();
+    const gstHeadingText = document.getElementById('gst-heading-input').value.trim();
+    const fontSize = document.getElementById('heading-font-size-input').value || '18';
+    const textTransform = document.getElementById('heading-text-transform').value;
+
+    // Update UI immediately
+    updateHeadingDisplay('regular-bill-heading', regHeadingText, fontSize, textTransform);
+    updateHeadingDisplay('gst-bill-heading', gstHeadingText, fontSize, textTransform);
+
+    // Save to Database
+    try {
+        const headings = {
+            regular: regHeadingText,
+            gst: gstHeadingText,
+            fontSize: fontSize,
+            textTransform: textTransform
+        };
+        await setInDB('settings', 'billHeadings', headings);
+        showNotification('Bill headings saved successfully!', 'success');
+        closeBillHeadingModal();
+    } catch (error) {
+        console.error('Error saving bill headings:', error);
+    }
+}
+
+function updateHeadingDisplay(elementId, text, fontSize = '18', textTransform = 'uppercase') {
+    const element = document.getElementById(elementId);
+    if (element) {
+        element.textContent = text;
+        // Show if text exists, Hide if empty
+        element.style.display = text.length > 0 ? 'block' : 'none';
+
+        // Apply styles
+        element.style.fontSize = fontSize + 'px';
+        element.style.textTransform = textTransform;
+    }
+}
+
+async function loadBillHeadings() {
+    try {
+        const headings = await getFromDB('settings', 'billHeadings');
+        if (headings) {
+            const fontSize = headings.fontSize || '18';
+            const textTransform = headings.textTransform || 'uppercase';
+
+            updateHeadingDisplay('regular-bill-heading', headings.regular || '', fontSize, textTransform);
+            updateHeadingDisplay('gst-bill-heading', headings.gst || '', fontSize, textTransform);
+        }
+    } catch (error) {
+        console.error('Error loading bill headings:', error);
+    }
+}
+
+// --- Branding (Logo, Sign, Stamp) Functions ---
+// --- Branding (Logo, Sign, Stamp) Functions ---
+
+let brandingSettings = {
+    logo: null,
+    logoPosition: 'left',
+    signature: null,
+    stamp: null
+};
+
+function openBrandingModal() {
+    // Load current position
+    document.getElementById('logo-position').value = brandingSettings.logoPosition || 'left';
+
+    // Clear file inputs (browser security doesn't allow retaining them)
+    document.getElementById('logo-upload').value = '';
+    document.getElementById('sign-upload').value = '';
+    document.getElementById('stamp-upload').value = '';
+
+    // Show current images in previews
+    updateModalPreviews();
+
+    document.getElementById('branding-modal').style.display = 'block';
+    toggleSettingsSidebar();
+}
+
+function closeBrandingModal() {
+    document.getElementById('branding-modal').style.display = 'none';
+}
+
+// Update the thumbnails in the modal based on current state
+function updateModalPreviews() {
+    const types = ['logo', 'signature', 'stamp'];
+
+    types.forEach(type => {
+        // Note: HTML IDs are 'sign-preview' but key is 'signature'
+        const domId = type === 'signature' ? 'sign' : type;
+        const container = document.getElementById(`${domId}-preview`);
+
+        if (container) {
+            container.innerHTML = '';
+            if (brandingSettings[type]) {
+                const img = document.createElement('img');
+                img.src = brandingSettings[type];
+                container.appendChild(img);
+            } else {
+                container.innerHTML = '<span>No image set</span>';
+            }
+        }
+    });
+}
+
+// Handle new file selection for preview
+async function previewImage(input, type) {
+    if (input.files && input.files[0]) {
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            // Update global state temporarily (will be saved on Save button)
+            brandingSettings[type] = e.target.result;
+            updateModalPreviews(); // Refresh UI
+        };
+        reader.readAsDataURL(input.files[0]);
+    }
+}
+
+async function saveBrandingSettings() {
+    const position = document.getElementById('logo-position').value;
+
+    try {
+        // Update settings object with position
+        brandingSettings.logoPosition = position;
+
+        // Note: We don't need to read file inputs here because 
+        // previewImage() already updated the brandingSettings object
+
+        // Save to DB
+        await setInDB('settings', 'branding', brandingSettings);
+
+        // Update Bill UI
+        updateBrandingUI();
+
+        showNotification('Branding saved successfully!', 'success');
+        closeBrandingModal();
+    } catch (error) {
+        console.error('Error saving branding:', error);
+        showNotification('Error saving images', 'error');
+    }
+}
+
+function clearImage(type) {
+    // 1. Update State immediately
+    brandingSettings[type] = null;
+
+    // 2. Clear Input
+    const inputId = type === 'signature' ? 'sign-upload' : `${type}-upload`;
+    const input = document.getElementById(inputId);
+    if (input) input.value = '';
+
+    // 3. Update Preview immediately
+    updateModalPreviews();
+
+    showNotification(`${type} removed (Click Save to apply)`, 'info');
+}
+
+async function loadBrandingSettings() {
+    try {
+        const saved = await getFromDB('settings', 'branding');
+        if (saved) {
+            brandingSettings = { ...brandingSettings, ...saved };
+            updateBrandingUI();
+        }
+    } catch (error) {
+        console.error('Error loading branding:', error);
+    }
+}
+
+function updateBrandingUI() {
+    // 1. Update Header Logo (Regular & GST)
+    const containers = ['regular-company-details', 'gst-company-details'];
+
+    containers.forEach(id => {
+        const container = document.getElementById(id);
+        if (!container) return;
+
+        const existingLogo = container.querySelector('.bill-logo');
+        if (existingLogo) existingLogo.remove();
+
+        if (brandingSettings.logo) {
+            const img = document.createElement('img');
+            img.src = brandingSettings.logo;
+            img.className = 'bill-logo';
+
+            if (brandingSettings.logoPosition === 'left') {
+                container.insertBefore(img, container.firstChild);
+                container.style.flexDirection = 'row';
+                container.querySelector('.company-text').style.textAlign = 'right';
+            } else {
+                container.appendChild(img);
+                container.style.flexDirection = 'row';
+                container.querySelector('.company-text').style.textAlign = 'left';
+            }
+        } else {
+            container.querySelector('.company-text').style.textAlign = 'center';
+        }
+    });
+
+    // 2. Update Footer (Sign & Stamp Separate Cells) - GST Only
+    const stampCell = document.getElementById('stamp-cell');
+    const signatureCell = document.getElementById('signature-cell');
+
+    if (stampCell && signatureCell) {
+        // Clear current contents
+        stampCell.innerHTML = '';
+        signatureCell.innerHTML = '';
+
+        // Add Stamp
+        if (brandingSettings.stamp) {
+            const stampImg = document.createElement('img');
+            stampImg.src = brandingSettings.stamp;
+            stampImg.className = 'bill-stamp';
+            stampCell.appendChild(stampImg);
+        }
+
+        // Add Signature
+        if (brandingSettings.signature) {
+            const signImg = document.createElement('img');
+            signImg.src = brandingSettings.signature;
+            signImg.className = 'bill-signature';
+            signatureCell.appendChild(signImg);
+        }
+    }
+}
+
+// Add this to your DOMContentLoaded event listener
+// await loadBrandingSettings();
