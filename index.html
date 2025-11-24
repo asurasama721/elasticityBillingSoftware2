@@ -1005,7 +1005,7 @@
         <div class="settings-content">
             <button onclick="openGSTModeModal()" class="settings-btn gst-mode-btn"><span
                     class="material-icons">receipt_long</span></button>
-            <button onclick="openCompanyInfoModal()" class="settings-btn company-info-btn" style="display: none;"><span
+            <button onclick="openCompanyInfoModal()" class="settings-btn company-info-btn"><span
                     class="material-icons">business</span>COMPANY INFO</button>
             <button onclick="openCustomerDetailsModal()" class="settings-btn customer-details-btn"
                 style="display: none;"><span class="material-icons">person</span>CUSTOMER DETAILS</button>
@@ -1069,6 +1069,8 @@
         <button onclick="openDiscountModal()"><span class="material-icons">percent</span>DISCOUNT</button>
         <button onclick="openGSTModal()" id="gst-tool-btn"><span class="material-icons">request_quote</span>GST</button>
         <button onclick="openSectionModal()"><span class="material-icons">view_day</span>SECTION</button>
+        <button onclick="toggleRegularFooter()" id="reg-footer-btn" style="display: none;"><span
+                class="material-icons">vertical_align_bottom</span>FOOTER</button>
         <!-- Settings Button -->
         <button onclick="toggleSettingsSidebar()"><span class="material-icons">settings</span>SETTINGS</button>
     </div>
@@ -1080,15 +1082,12 @@
                 style="display: none; text-align: center; margin-bottom: 5px; text-transform: uppercase;"></h4>
             <div class="company-details" id="regular-company-details">
                 <div class="company-text">
-                    <div class="top-name" contenteditable="true" oninput="saveToLocalStorage()" id="companyName">SHREE
-                        BALAJI PLY AND HARDWARE</div>
+                    <div class="top-name" id="companyName">COMPANY NAME</div>
                     <div class="contact">
-                        <p contenteditable="true" oninput="saveToLocalStorage()" id="companyAddr">pandav nagar, phase -
-                            1, hinjewadi, pune - 411057</p>
-                        <p contenteditable="true" oninput="saveToLocalStorage()" id="companyPhone">Contact no :
-                            989014751</p>
-                        <p contenteditable="true" oninput="saveToLocalStorage()" id="companyGstin"
-                            style="display: none;">GSTIN : Your 15-digit GSTIN</p>
+                        <p id="companyAddr">Address</p>
+                        <p id="reg-header-gstin-line">GSTIN : <span id="companyGstin">Your 15-digit GSTIN</span></p>
+                        <p id="reg-header-phone-line">Contact No : <span id="companyPhone">+91 1234567890</span></p>
+                        <p id="reg-header-email-line">Email : <span id="companyEmail">abcd@gmail.com</span></p>
                     </div>
                 </div>
             </div>
@@ -1097,9 +1096,14 @@
                 <table>
                     <tr>
                         <td class="label">
-                            Name: <input type="text" id="custName" oninput="handleCustomerNameInput()"
-                                list="customer-list" />
-                            <datalist id="customer-list"></datalist>
+                            Name:
+                            <div
+                                style="position: relative; display: inline-block; width: calc(100% - 70px); vertical-align: top;">
+                                <input type="text" id="custName" oninput="handleRegularCustomerSearch()"
+                                    autocomplete="off" style="width: 100%; margin-left: 5px;">
+                                <div class="customer-suggestions" id="regular-customer-suggestions"
+                                    style="display: none;"></div>
+                            </div>
                         </td>
                         <td class="label">
                             Bill no: <input type="text" id="billNo" oninput="saveToLocalStorage()" />
@@ -1160,6 +1164,42 @@
                         <td id="grand-total-amount" class="total-cell" style="text-align: center;">0.00</td>
                     </tr>
                 </table>
+                <table class="bill-footer" id="regular-bill-footer" style="display: none; margin-top: 20px;">
+                <tbody>
+                    <tr>
+                        <td>
+                            <p><strong>Amount Chargeable (in words)</strong></p>
+                        </td>
+                        <td class="align-center" colspan="2">
+                            <p id="reg-bill-company-signatory">for COMPANY NAME</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <p id="reg-bill-amount-words">Rupees Zero Only</p>
+                        </td>
+                        <td rowspan="2" style="width: 15%; vertical-align: middle;text-align: center;" id="reg-stamp-cell"></td>
+                        <td rowspan="2" style="width: 15%; vertical-align: middle;text-align: center;" id="reg-signature-cell"></td>
+                    </tr>
+                    <tr>
+                        <td class="bank-info">
+                            <p><strong>A/C Holder Name :</strong> <span id="reg-bill-account-holder">-</span></p>
+                            <p><strong>A/C No :</strong> <span id="reg-bill-account-number">-</span></p>
+                            <span><strong>IFSC :</strong> <span id="reg-bill-ifsc-code">-</span></span>
+                            <span><strong>Branch :</strong> <span id="reg-bill-branch">-</span></span>
+                            <p><strong>Bank Name :</strong> <span id="reg-bill-bank-name">-</span></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <b>Declaration : </b>
+                            <p><small>We declare that this invoice shows the actual price of the </small></p>
+                            <p><small>goods described and that all particulars are true and correct</small></p>
+                        </td>
+                        <td style="text-align:center; vertical-align: middle;" colspan="2">Authorised Signatory</td>
+                    </tr>
+                </tbody>
+            </table>
             </div>
         </div>
 
@@ -1299,8 +1339,7 @@
                             <td>
                                 <p id="bill-amount-words">Rupees Zero Only</p>
                             </td>
-                            <td rowspan="2"
-                                style="width: 15%; vertical-align: middle;text-align: center;"
+                            <td rowspan="2" style="width: 15%; vertical-align: middle;text-align: center;"
                                 id="stamp-cell">
                             </td>
                             <td rowspan="2" style="width: 15%; vertical-align: middle;text-align: center;"
@@ -1379,6 +1418,14 @@
                     <option value="cm">cm</option>
                     <option value="mm">mm</option>
                 </select>
+                <select id="convertUnit" onchange="handleConvertUnitChange()" style="display: none; margin-left: 5px;">
+                    <option value="none">Select Convert</option>
+                    <option value="ft">ft</option>
+                    <option value="inch">inch</option>
+                    <option value="mtr">mtr</option>
+                    <option value="cm">cm</option>
+                    <option value="mm">mm</option>
+                </select>
             </div>
 
             <!-- Dimension Inputs -->
@@ -1432,6 +1479,8 @@
                 <button onclick="updateRowManual()" id="updateItemBtnManual" style="display: none;">Update Item</button>
                 <button onclick="toggleDiscountInputs()" id="toggleDiscountBtn">Discount</button>
                 <button onclick="toggleDimensionInputs()" id="toggleDimensionBtn">Dimensions</button>
+                <button onclick="toggleConvertOptions()" id="toggleConvertBtn"
+                    style="display: none; background-color: #95a5a6;">Convert</button>
                 <button onclick="toggleGSTInclusive()" id="gstInclusiveBtn" style="display: none;">Exclusive</button>
             </div>
 
@@ -1649,20 +1698,28 @@
                 <h3>Logo, Sign & Stamp</h3>
                 <span class="close" onclick="closeBrandingModal()">&times;</span>
             </div>
-            <div class="modal-body">
+            <div class="modal-body" style="height: 70vh; overflow-y: auto;">
                 <div class="form-group">
                     <label>Company Logo:</label>
                     <div id="logo-preview" class="img-preview-box"></div>
 
                     <input type="file" id="logo-upload" accept="image/*" onchange="previewImage(this, 'logo')">
 
-                    <div style="margin-top: 10px;">
-                        <label>Logo Position:</label>
-                        <select id="logo-position">
-                            <option value="left">Left</option>
-                            <option value="right">Right</option>
-                        </select>
+                    <div style="margin-top: 10px; display: flex; gap: 10px;">
+                        <div style="flex: 1;">
+                            <label>Logo Position:</label>
+                            <select id="logo-position" style="width: 100%;">
+                                <option value="left">Left</option>
+                                <option value="right">Right</option>
+                            </select>
+                        </div>
+                        <div style="flex: 1;">
+                            <label>Border Radius (%):</label>
+                            <input type="number" id="logo-radius" value="0" min="0" max="50" placeholder="0-50"
+                                style="width: 100%;">
+                        </div>
                     </div>
+
                     <button onclick="clearImage('logo')" class="btn-cancel"
                         style="margin-top:5px; padding: 5px 10px; font-size: 12px;">Remove Logo</button>
                 </div>
