@@ -361,7 +361,7 @@ body.gst-mode #tools button:hover .material-icons {
     width: 100%;
 }
 
-#gst-bill-container .bill-footer td {
+#gst-bill-container .bill-footer td, #regular-bill-footer td {
     padding: 3px 5px;
 }
 
@@ -383,7 +383,7 @@ body.gst-mode #tools button:hover .material-icons {
 }
 
 /* Company signatory */
-#bill-company-signatory {
+#bill-company-signatory,#reg-bill-company-signatory {
     font-size: 0.85em;
     margin: 0;
     padding: 0;
@@ -807,7 +807,9 @@ body.gst-mode #tools button:hover .material-icons {
 }
 
 .customer-suggestions {
-    position: sticky;
+    position: absolute; /* <--- Changed from sticky */
+    top: 100%;          /* <--- Added: Puts it directly below input */
+    left: 0;            /* <--- Added: Aligns left */
     background: white;
     border: 1px solid var(--border-color);
     border-radius: 4px;
@@ -816,8 +818,8 @@ body.gst-mode #tools button:hover .material-icons {
     z-index: 1000;
     width: 100%;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    margin-top: 2px;    /* <--- Added: Tiny gap for visuals */
 }
-
 .customer-suggestion-item {
     padding: 8px 12px;
     cursor: pointer;
@@ -1054,6 +1056,7 @@ body.gst-mode .settings-btn:hover .material-icons {
 
 .form-group {
     margin-bottom: 15px;
+    position: relative;
 }
 
 .form-group label {
@@ -3037,4 +3040,17 @@ terms modal
     font-size: 0.8em;
     color: #999;
     font-style: italic;
+}
+
+/* Convert Button Styles */
+#toggleConvertBtn {
+    transition: all 0.3s ease;
+}
+#toggleConvertBtn.active {
+    background-color: #8e44ad !important; /* Purple to distinguish it */
+    color: white;
+}
+#convertUnit {
+    border: 1px solid var(--secondary-color);
+    background-color: #f0f0f0;
 }
