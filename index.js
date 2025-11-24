@@ -31,7 +31,9 @@ let autoApplyCustomerRates = true;
 // Edit mode variables
 let editMode = false;
 let currentEditingBillId = null;
-let currentEditingBillType = null; // 'regular' or 'gst'
+let currentEditingBillType = null; // 'regular' or 'gst
+// 
+let currentConvertUnit = 'none';
 
 // Add this with other global variables
 let sectionModalState = {
@@ -778,13 +780,27 @@ function toggleDiscountInputs() {
 function toggleDimensionInputs() {
     const container = document.getElementById('dimension-inputs-container');
     const button = document.getElementById('toggleDimensionBtn');
+    const convertBtn = document.getElementById('toggleConvertBtn');
 
     if (container.style.display === 'none') {
         container.style.display = 'flex';
-        button.style.backgroundColor = '#3498db'; // Blue when active
+        button.style.backgroundColor = '#3498db';
+        if (convertBtn) convertBtn.style.display = 'inline-block';
     } else {
         container.style.display = 'none';
-        button.style.backgroundColor = ''; // Reset to default
+        button.style.backgroundColor = '';
+        if (convertBtn) {
+            convertBtn.style.display = 'none';
+            convertBtn.classList.remove('active');
+        }
+
+        // Reset convert state
+        const convertSelect = document.getElementById('convertUnit');
+        if (convertSelect) {
+            convertSelect.style.display = 'none';
+            convertSelect.value = 'none';
+        }
+        currentConvertUnit = 'none';
     }
 }
 
@@ -1088,6 +1104,28 @@ document.addEventListener('DOMContentLoaded', async function () {
                 }
             }
         });
+        // Add this to hide ALL suggestion boxes when clicking elsewhere
+        document.addEventListener('click', function (e) {
+            // Array of input IDs and their corresponding suggestion box IDs
+            const suggestionPairs = [
+                { inputId: 'itemNameManual', boxId: 'item-suggestions' },       // Item Search
+                { inputId: 'consignee-name', boxId: 'consignee-suggestions' }, // Bill To Search
+                { inputId: 'buyer-name', boxId: 'buyer-suggestions' },          // Ship To Search
+                { inputId: 'custName', boxId: 'regular-customer-suggestions' }  // Regular Customer Search (NEW)
+            ];
+
+            suggestionPairs.forEach(pair => {
+                const input = document.getElementById(pair.inputId);
+                const box = document.getElementById(pair.boxId);
+
+                if (input && box) {
+                    // If click is NOT on the input AND NOT inside the suggestion box
+                    if (e.target !== input && !box.contains(e.target)) {
+                        box.style.display = 'none';
+                    }
+                }
+            });
+        });
 
         // ADD THIS: Close restored bills modal
         const closeRestoredBtn = document.querySelector('#restored-bills-modal .close');
@@ -1137,7 +1175,43 @@ function initializeDateInputs() {
     });
 }
 
+function toggleConvertOptions() {
+    const convertSelect = document.getElementById('convertUnit');
+    const btn = document.getElementById('toggleConvertBtn');
 
+    if (convertSelect.style.display === 'none') {
+        convertSelect.style.display = 'inline-block';
+        btn.classList.add('active');
+    } else {
+        convertSelect.style.display = 'none';
+        convertSelect.value = 'none';
+        currentConvertUnit = 'none';
+        btn.classList.remove('active');
+        // Recalculate without conversion
+        calculateDimensions();
+    }
+}
+
+function handleConvertUnitChange() {
+    currentConvertUnit = document.getElementById('convertUnit').value;
+}
+
+function getConversionFactor(fromUnit, toUnit, power) {
+    if (fromUnit === toUnit || toUnit === 'none' || !toUnit) return 1;
+
+    const factors = {
+        ft: { inch: 12, mtr: 0.3048, cm: 30.48, mm: 304.8 },
+        inch: { ft: 1 / 12, mtr: 0.0254, cm: 2.54, mm: 25.4 },
+        mtr: { ft: 3.28084, inch: 39.3701, cm: 100, mm: 1000 },
+        cm: { ft: 0.0328084, inch: 0.393701, mtr: 0.01, mm: 10 },
+        mm: { ft: 0.00328084, inch: 0.0393701, mtr: 0.001, cm: 0.1 }
+    };
+
+    if (!factors[fromUnit] || !factors[fromUnit][toUnit]) return 1;
+
+    const baseFactor = factors[fromUnit][toUnit];
+    return Math.pow(baseFactor, power);
+}
 
 function handleDimensionTypeChange() {
     const dimensionType = document.getElementById('dimensionType').value;
@@ -1566,6 +1640,7 @@ function selectItemSuggestion(itemName) {
     // Trigger the existing item name input handler
     handleItemNameInput();
 }
+
 
 async function handleItemNameInput() {
     const itemName = document.getElementById('itemNameManual').value.trim();
@@ -2390,19 +2465,15 @@ async function deleteItem(itemName) {
     }
 }
 
+//Useless loadsaved function 
 async function loadSavedCustomers() {
+    // We no longer use the <datalist>, so we don't need to populate HTML here.
+    // The new suggestion box fetches data dynamically when you type.
     try {
-        const customers = await getAllFromDB('savedCustomers');
-        const datalist = document.getElementById('customer-list');
-        datalist.innerHTML = '';
-
-        customers.forEach(customer => {
-            const option = document.createElement('option');
-            option.value = customer.value.name;
-            datalist.appendChild(option);
-        });
+        // Just ensuring DB connection works
+        await getAllFromDB('savedCustomers');
     } catch (error) {
-        console.error('Error loading saved customers:', error);
+        console.error('Error checking saved customers:', error);
     }
 }
 
@@ -2567,6 +2638,70 @@ function searchCustomers() {
             card.style.display = 'none';
         }
     });
+}
+async function handleRegularCustomerSearch() {
+    const input = document.getElementById('custName');
+    const suggestions = document.getElementById('regular-customer-suggestions');
+    const searchTerm = input.value.trim();
+
+    if (searchTerm.length < 1) {
+        suggestions.style.display = 'none';
+        return;
+    }
+
+    try {
+        const allCustomers = await getAllFromDB('savedCustomers');
+
+        // Filter customers
+        const filtered = allCustomers.filter(customer =>
+            customer.value.name.toLowerCase().includes(searchTerm.toLowerCase())
+        ).slice(0, 5);
+
+        suggestions.innerHTML = '';
+
+        if (filtered.length > 0) {
+            filtered.forEach(customer => {
+                const div = document.createElement('div');
+                div.className = 'customer-suggestion-item';
+                div.textContent = customer.value.name; // Display Name
+
+                // Click handler
+                div.onclick = () => selectRegularCustomer(customer.value);
+
+                suggestions.appendChild(div);
+            });
+            suggestions.style.display = 'block';
+        } else {
+            suggestions.style.display = 'none';
+        }
+
+        // Also trigger the existing logic for rate suggestions
+        window.currentCustomer = searchTerm;
+
+    } catch (error) {
+        console.error('Error searching regular customers:', error);
+        suggestions.style.display = 'none';
+    }
+}
+
+async function selectRegularCustomer(customer) {
+    // 1. Fill Fields
+    document.getElementById('custName').value = customer.name;
+    document.getElementById('custAddr').value = customer.address || '';
+    document.getElementById('custPhone').value = customer.phone || '';
+    document.getElementById('custGSTIN').value = customer.gstin || '';
+
+    // 2. Hide Suggestions
+    document.getElementById('regular-customer-suggestions').style.display = 'none';
+
+    // 3. Save & Trigger updates
+    await saveToLocalStorage();
+
+    // 4. Trigger Rate Application
+    window.currentCustomer = customer.name;
+    if (typeof checkAndApplyCustomerRates === 'function') {
+        await checkAndApplyCustomerRates(customer.name);
+    }
 }
 
 // Search Bills (works for both regular and GST)
@@ -2981,7 +3116,7 @@ function formatNumber(value) {
     }
 }
 
-function formatParticularsManual(itemName, notes, dimensions = '', quantity = 0, finalQuantity = 0, rate = 0, dimensionType = 'none', dimensionUnit = 'ft', unit = '', discountType = 'none', discountValue = '', toggleStates = null) {
+function formatParticularsManual(itemName, notes, dimensions = '', quantity = 0, finalQuantity = 0, rate = 0, dimensionType = 'none', dimensionUnit = 'ft', unit = '', discountType = 'none', discountValue = '', toggleStates = null, convertUnit = 'none') {
     let particularsHtml = `<div class="itemNameClass">${itemName}</div>`;
 
     // Format the values using the helper function
@@ -3018,47 +3153,39 @@ function formatParticularsManual(itemName, notes, dimensions = '', quantity = 0,
                 geometricDimensionsCount = 0;
         }
 
-        // ADJUST for unchecked toggles - only count dimensions that are actually used
+        // ADJUST for unchecked toggles
         if (toggleStates) {
             let actualUsedDimensions = 0;
+            // Recalculate based on what is actually physically present in the calculation
+            // We can't just map type to toggles blindly because different types use different toggles
+            // But since we only need the count for the unit suffix (ft, sq.ft, cu.ft), we can count true toggles
+            // LIMITED by the geometric max of that type.
 
-            switch (dimensionType) {
-                case 'length':
-                    actualUsedDimensions = toggleStates.toggle1 ? 1 : 0;
-                    break;
-                case 'widthXheight':
-                case 'widthXdepth':
-                case 'lengthXdepth':
-                case 'lengthXheight':
-                case 'lengthXwidth':
-                    actualUsedDimensions = (toggleStates.toggle1 ? 1 : 0) + (toggleStates.toggle2 ? 1 : 0);
-                    break;
-                case 'widthXheightXdepth':
-                case 'lengthXwidthXheight':
-                case 'lengthXheightXdepth':
-                case 'lengthXwidthXdepth':
-                    actualUsedDimensions = (toggleStates.toggle1 ? 1 : 0) + (toggleStates.toggle2 ? 1 : 0) + (toggleStates.toggle3 ? 1 : 0);
-                    break;
-            }
+            let activeCount = 0;
+            if (toggleStates.toggle1) activeCount++;
+            if (toggleStates.toggle2) activeCount++;
+            if (toggleStates.toggle3) activeCount++;
 
-            // Use the actual used dimensions count instead of the geometric count
-            geometricDimensionsCount = actualUsedDimensions;
+            // If type is 2D but 3 toggles are active (shouldn't happen logic-wise but safety check), cap it
+            geometricDimensionsCount = Math.min(geometricDimensionsCount, activeCount);
         }
 
-        // DETERMINE UNIT SUFFIX based on geometric dimensions only
+        // DETERMINE UNIT SUFFIX based on convertUnit OR dimensionUnit
+        let displayUnit = (convertUnit && convertUnit !== 'none') ? convertUnit : dimensionUnit;
         let unitSuffix = '';
+
         switch (geometricDimensionsCount) {
             case 1:
-                unitSuffix = dimensionUnit; // Linear
+                unitSuffix = displayUnit; // Linear
                 break;
             case 2:
-                unitSuffix = dimensionUnit + '²'; // Area
+                unitSuffix = displayUnit + '²'; // Area
                 break;
             case 3:
-                unitSuffix = dimensionUnit + '³'; // Volume
+                unitSuffix = displayUnit + '³'; // Volume
                 break;
             default:
-                unitSuffix = dimensionUnit; // Fallback
+                unitSuffix = displayUnit; // Fallback
         }
 
         calculationText = `${dimensions} X ${formattedQuantity}${unit} = ${formattedFinalQuantity}${unitSuffix}`;
@@ -3123,7 +3250,6 @@ async function addRowManual() {
 
     // GST Inclusive Logic
     if (isGSTMode && isGSTInclusive && currentGSTPercent > 0) {
-        // Convert inclusive rate to exclusive rate
         rate = rate / (1 + currentGSTPercent / 100);
     }
 
@@ -3144,13 +3270,13 @@ async function addRowManual() {
     // ENSURE DIMENSION VALUES ARE PROPERLY CALCULATED FIRST
     calculateDimensions();
 
-    // CAPTURE DIMENSION DATA AFTER CALCULATION
+    // CAPTURE DIMENSION DATA
     const currentDimType = currentDimensions.type;
     const currentDimValues = [...currentDimensions.values];
     const currentDimUnit = currentDimensions.unit;
     const currentDimArea = currentDimensions.calculatedArea;
 
-    // CAPTURE TOGGLE STATES - FIX: Properly get toggle states
+    // CAPTURE TOGGLE STATES
     const dim1Toggle = document.getElementById('dimension1-toggle');
     const dim2Toggle = document.getElementById('dimension2-toggle');
     const dim3Toggle = document.getElementById('dimension3-toggle');
@@ -3160,18 +3286,34 @@ async function addRowManual() {
         toggle3: dim3Toggle ? dim3Toggle.checked : true
     };
 
-    // Get dimensions display text USING CAPTURED VALUES AND TOGGLE STATES
+    // Get dimensions display text
     const dimensionText = getDimensionDisplayText(currentDimType, currentDimValues, currentDimUnit, toggleStates);
 
     // Store original quantity with full precision
     const originalQuantity = quantity;
 
-    // Calculate base amount without discount
+    // --- NEW CONVERSION LOGIC ---
+    let power = 0;
+    if (currentDimType !== 'none' && currentDimType !== 'dozen') {
+        if (toggleStates.toggle1) power++;
+        if (['widthXheight', 'widthXdepth', 'lengthXdepth', 'lengthXheight', 'lengthXwidth', 'widthXheightXdepth', 'lengthXwidthXheight', 'lengthXheightXdepth', 'lengthXwidthXdepth'].includes(currentDimType)) {
+            if (toggleStates.toggle2) power++;
+        }
+        if (['widthXheightXdepth', 'lengthXwidthXheight', 'lengthXheightXdepth', 'lengthXwidthXdepth'].includes(currentDimType)) {
+            if (toggleStates.toggle3) power++;
+        }
+    }
+    const selectedConvertUnit = document.getElementById('convertUnit').value;
+    const conversionFactor = getConversionFactor(currentDimUnit, selectedConvertUnit, power);
+    // ----------------------------
+
+    // Calculate base amount
     let calculatedQuantity = quantity;
     let baseAmount = 0;
 
     if (currentDimType !== 'none' && currentDimType !== 'dozen' && currentDimArea > 0) {
-        calculatedQuantity = quantity * currentDimArea;
+        // Apply conversion factor
+        calculatedQuantity = (quantity * currentDimArea) * conversionFactor;
         baseAmount = storeWithPrecision(calculatedQuantity * rate);
     } else if (currentDimType === 'dozen') {
         calculatedQuantity = quantity / 12;
@@ -3180,35 +3322,27 @@ async function addRowManual() {
         baseAmount = quantity * rate;
     }
 
-    // CALCULATE DISCOUNT BASED ON DISCOUNT TYPE
+    // CALCULATE DISCOUNT
     let discountAmount = 0;
     let finalAmount = baseAmount;
 
     if (discountType !== 'none' && discountValue > 0) {
         switch (discountType) {
             case 'percent_per_unit':
-                // Discount % per unit: (rate * discount%) * quantity
                 const discountPerUnit = rate * (discountValue / 100);
                 discountAmount = discountPerUnit * (currentDimType !== 'none' && currentDimType !== 'dozen' ? calculatedQuantity : quantity);
                 break;
             case 'amt_per_unit':
-                // Discount amount per unit: discountValue * quantity
                 discountAmount = discountValue * (currentDimType !== 'none' && currentDimType !== 'dozen' ? calculatedQuantity : quantity);
                 break;
             case 'percent_on_amount':
-                // Discount % on total amount: baseAmount * discount%
                 discountAmount = baseAmount * (discountValue / 100);
                 break;
             case 'amt_on_amount':
-                // Discount amount on total amount: fixed discount
                 discountAmount = discountValue;
                 break;
         }
-
-        // Apply discount to final amount
         finalAmount = storeWithPrecision(baseAmount - discountAmount);
-
-        // Ensure final amount doesn't go below 0
         if (finalAmount < 0) finalAmount = 0;
     }
 
@@ -3218,7 +3352,6 @@ async function addRowManual() {
 
     const id = 'row-manual-' + rowCounterManual++;
 
-    // Create rows with the CAPTURED dimension data, toggle states, and discount calculation
     const row1 = createTableRowManual(
         id,
         itemName,
@@ -3241,11 +3374,12 @@ async function addRowManual() {
         currentDimUnit,
         hsnCode,
         productCode,
-        discountType,  // ADDED: Pass discount type
-        discountValue  // ADDED: Pass discount value
+        discountType,
+        discountValue,
+        true,
+        selectedConvertUnit // Pass convert unit
     );
 
-    // Store amount with high precision
     row1.setAttribute('data-amount', storeWithPrecision(finalAmount));
     row1.setAttribute('data-rate', storeWithPrecision(rate));
 
@@ -3271,14 +3405,15 @@ async function addRowManual() {
         currentDimUnit,
         hsnCode,
         productCode,
-        discountType,  // ADDED: Pass discount type
-        discountValue  // ADDED: Pass discount value
+        discountType,
+        discountValue,
+        true,
+        selectedConvertUnit // Pass convert unit
     );
 
     document.getElementById("createListManual").querySelector('tbody').appendChild(row1);
     document.getElementById("copyListManual").querySelector('tbody').appendChild(row2);
 
-    // FIX: Always copy items to GST table when in GST mode
     if (isGSTMode) {
         copyItemsToGSTBill();
         updateGSTTaxCalculation();
@@ -3290,7 +3425,7 @@ async function addRowManual() {
     await saveToLocalStorage();
     saveStateToHistory();
 
-    // Clear input fields including HSN fields
+    // Clear inputs
     document.getElementById("itemNameManual").value = "";
     document.getElementById("quantityManual").value = "";
     document.getElementById("rateManual").value = "";
@@ -3298,8 +3433,6 @@ async function addRowManual() {
     document.getElementById("dimension1").value = "";
     document.getElementById("dimension2").value = "";
     document.getElementById("dimension3").value = "";
-
-    // Clear discount fields
     document.getElementById("discountType").value = "none";
     document.getElementById("discountValue").value = "";
 
@@ -3308,12 +3441,17 @@ async function addRowManual() {
         document.getElementById("productCodeManual").value = "";
     }
 
-    // Reset dimension inputs
     document.getElementById('dimensionType').value = 'none';
     document.getElementById('measurementUnit').style.display = 'none';
     document.getElementById('dimensionInputs').style.display = 'none';
 
-    // Reset currentDimensions AFTER creating the rows
+    // Reset Convert options
+    document.getElementById('toggleConvertBtn').style.display = 'none';
+    document.getElementById('toggleConvertBtn').classList.remove('active');
+    document.getElementById('convertUnit').style.display = 'none';
+    document.getElementById('convertUnit').value = 'none';
+    currentConvertUnit = 'none';
+
     currentDimensions = {
         type: 'none',
         unit: 'ft',
@@ -3328,22 +3466,16 @@ async function updateRowManual() {
     if (!currentlyEditingRowIdManual) return;
 
     let itemName = document.getElementById("itemNameManual").value.trim();
-
-    // FIX: Get and format the quantity properly
     let quantityInput = document.getElementById("quantityManual").value.trim();
     let quantity = parseFloat(quantityInput);
-
     let unit = document.getElementById("selectUnit").value.trim();
     let rate = parseFloat(document.getElementById("rateManual").value.trim());
 
-    // GST Inclusive Logic
     if (isGSTMode && isGSTInclusive && currentGSTPercent > 0) {
-        // Convert inclusive rate to exclusive rate
         rate = rate / (1 + currentGSTPercent / 100);
     }
     const notes = document.getElementById("itemNotesManual").value.trim();
 
-    // Get HSN code if in GST mode
     let hsnCode = '';
     let productCode = '';
     if (isGSTMode) {
@@ -3351,14 +3483,11 @@ async function updateRowManual() {
         productCode = document.getElementById("productCodeManual").value.trim();
     }
 
-    // Get discount values
     const discountType = document.getElementById("discountType").value;
     const discountValue = parseFloat(document.getElementById("discountValue").value) || 0;
 
-    // FIX: Define dimensionType BEFORE using it
     const dimensionType = currentDimensions.type;
 
-    // FIX: Get dimension toggle states safely - CAPTURE CURRENT STATE FROM FORM
     const dim1Toggle = document.getElementById('dimension1-toggle');
     const dim2Toggle = document.getElementById('dimension2-toggle');
     const dim3Toggle = document.getElementById('dimension3-toggle');
@@ -3368,33 +3497,41 @@ async function updateRowManual() {
         toggle3: dim3Toggle ? dim3Toggle.checked : true
     };
 
-    // FIX: CAPTURE CURRENT DIMENSION INPUT VALUES (not from currentDimensions object)
     const dim1Value = parseFloat(document.getElementById('dimension1').value) || 0;
     const dim2Value = parseFloat(document.getElementById('dimension2').value) || 0;
     const dim3Value = parseFloat(document.getElementById('dimension3').value) || 0;
 
-    // FORMAT VALUES BEFORE USING THEM (ensure consistency)
     document.getElementById('dimension1').value = dim1Value.toFixed(2);
     document.getElementById('dimension2').value = dim2Value.toFixed(2);
     document.getElementById('dimension3').value = dim3Value.toFixed(2);
 
-    // Update currentDimensions with the formatted values
     currentDimensions.values = [dim1Value, dim2Value, dim3Value];
-
-    // Recalculate dimensions with the actual input values
     calculateDimensions();
 
-    // FIX: Get dimension text with current toggle states and ACTUAL VALUES - NOW dimensionType is defined
     const dimensionText = getDimensionDisplayText(dimensionType, currentDimensions.values, currentDimensions.unit, toggleStates);
+    const originalQuantity = quantity;
 
-    const originalQuantity = quantity; // Store the parsed quantity
+    // --- NEW CONVERSION LOGIC ---
+    let power = 0;
+    if (currentDimensions.type !== 'none' && currentDimensions.type !== 'dozen') {
+        if (toggleStates.toggle1) power++;
+        if (['widthXheight', 'widthXdepth', 'lengthXdepth', 'lengthXheight', 'lengthXwidth', 'widthXheightXdepth', 'lengthXwidthXheight', 'lengthXheightXdepth', 'lengthXwidthXdepth'].includes(currentDimensions.type)) {
+            if (toggleStates.toggle2) power++;
+        }
+        if (['widthXheightXdepth', 'lengthXwidthXheight', 'lengthXheightXdepth', 'lengthXwidthXdepth'].includes(currentDimensions.type)) {
+            if (toggleStates.toggle3) power++;
+        }
+    }
+    const selectedConvertUnit = document.getElementById('convertUnit').value;
+    const conversionFactor = getConversionFactor(currentDimensions.unit, selectedConvertUnit, power);
+    // ----------------------------
 
-    // Calculate base amount without discount
     let calculatedQuantity = quantity;
     let baseAmount = 0;
 
     if (currentDimensions.type !== 'none' && currentDimensions.type !== 'dozen' && currentDimensions.calculatedArea > 0) {
-        calculatedQuantity = quantity * currentDimensions.calculatedArea;
+        // Apply conversion factor
+        calculatedQuantity = (quantity * currentDimensions.calculatedArea) * conversionFactor;
         baseAmount = storeWithPrecision(calculatedQuantity * rate);
     } else if (currentDimensions.type === 'dozen') {
         calculatedQuantity = quantity / 12;
@@ -3403,35 +3540,26 @@ async function updateRowManual() {
         baseAmount = quantity * rate;
     }
 
-    // CALCULATE DISCOUNT BASED ON DISCOUNT TYPE
     let discountAmount = 0;
     let finalAmount = baseAmount;
 
     if (discountType !== 'none' && discountValue > 0) {
         switch (discountType) {
             case 'percent_per_unit':
-                // Discount % per unit: (rate * discount%) * quantity
                 const discountPerUnit = rate * (discountValue / 100);
                 discountAmount = discountPerUnit * (currentDimensions.type !== 'none' && currentDimensions.type !== 'dozen' ? calculatedQuantity : quantity);
                 break;
             case 'amt_per_unit':
-                // Discount amount per unit: discountValue * quantity
                 discountAmount = discountValue * (currentDimensions.type !== 'none' && currentDimensions.type !== 'dozen' ? calculatedQuantity : quantity);
                 break;
             case 'percent_on_amount':
-                // Discount % on total amount: baseAmount * discount%
                 discountAmount = baseAmount * (discountValue / 100);
                 break;
             case 'amt_on_amount':
-                // Discount amount on total amount: fixed discount
                 discountAmount = discountValue;
                 break;
         }
-
-        // Apply discount to final amount
         finalAmount = storeWithPrecision(baseAmount - discountAmount);
-
-        // Ensure final amount doesn't go below 0
         if (finalAmount < 0) finalAmount = 0;
     }
 
@@ -3439,37 +3567,30 @@ async function updateRowManual() {
         return;
     }
 
-    // FIX: Define ALL variables that are used in formatParticularsManual call
     const numericRate = typeof rate === 'string' ? parseFloat(rate) : Number(rate);
-    const amount = finalAmount; // Use the finalAmount that's calculated above
-    const numericAmount = typeof amount === 'string' ? parseFloat(amount) : Number(amount);
-    const dimensionUnit = currentDimensions.unit; // This was missing!
+    const dimensionUnit = currentDimensions.unit;
 
-    // FIX: Define formattedDisplayQuantity properly
     const formattedDisplayQuantity = originalQuantity % 1 === 0 ?
         originalQuantity.toString() :
         originalQuantity.toFixed(2);
 
-    // FIX: Calculate finalQuantity (missing from updateRowManual)
     let finalQuantity = calculatedQuantity;
     if (currentDimensions.type !== 'none' && currentDimensions.type !== 'dozen' && currentDimensions.calculatedArea > 0) {
-        finalQuantity = quantity * currentDimensions.calculatedArea;
+        finalQuantity = (quantity * currentDimensions.calculatedArea) * conversionFactor;
     } else if (currentDimensions.type === 'dozen') {
         finalQuantity = quantity / 12;
     } else {
         finalQuantity = quantity;
     }
 
-    // Now use all the properly defined variables
-    let particularsHtml = formatParticularsManual(itemName, notes, dimensionText, formattedDisplayQuantity, finalQuantity, numericRate, dimensionType, dimensionUnit, unit, discountType, discountValue, toggleStates);
+    // Pass selectedConvertUnit
+    let particularsHtml = formatParticularsManual(itemName, notes, dimensionText, formattedDisplayQuantity, finalQuantity, numericRate, dimensionType, dimensionUnit, unit, discountType, discountValue, toggleStates, selectedConvertUnit);
 
-    // Update regular tables
     const rows = document.querySelectorAll(`tr[data-id="${currentlyEditingRowIdManual}"]`);
     rows.forEach(row => {
         const cells = row.children;
         cells[1].innerHTML = particularsHtml;
 
-        // FIX: Use formatted quantity in display
         const formattedQuantity = originalQuantity % 1 === 0 ?
             originalQuantity.toString() :
             originalQuantity.toFixed(2);
@@ -3479,28 +3600,25 @@ async function updateRowManual() {
         cells[4].textContent = parseFloat(rate).toFixed(2);
         cells[5].textContent = roundToTwoDecimals(finalAmount).toFixed(2);
 
-        // ADD THESE LINES:
         row.setAttribute('data-amount', storeWithPrecision(finalAmount));
         row.setAttribute('data-rate', storeWithPrecision(rate));
 
         row.setAttribute('data-dimension-type', dimensionType);
         row.setAttribute('data-dimension-values', JSON.stringify([...currentDimensions.values]));
         row.setAttribute('data-dimension-unit', currentDimensions.unit);
-        row.setAttribute('data-dimension-toggles', JSON.stringify(toggleStates)); // FIX: Save current toggle states
+        row.setAttribute('data-dimension-toggles', JSON.stringify(toggleStates));
         row.setAttribute('data-original-quantity', originalQuantity.toFixed(8));
+        row.setAttribute('data-convert-unit', selectedConvertUnit); // SAVE CONVERT UNIT
 
-        // Update HSN data if in GST mode
         if (isGSTMode) {
             row.setAttribute('data-hsn', hsnCode);
             row.setAttribute('data-product-code', productCode);
         }
 
-        // Update discount data attributes
         row.setAttribute('data-discount-type', discountType);
         row.setAttribute('data-discount-value', discountValue);
     });
 
-    // FIX: Always update GST table when in GST mode
     if (isGSTMode) {
         copyItemsToGSTBill();
         updateGSTTaxCalculation();
@@ -3511,7 +3629,7 @@ async function updateRowManual() {
     await saveToLocalStorage();
     saveStateToHistory();
 
-    // Clear input fields including HSN fields
+    // Clear inputs
     document.getElementById("itemNameManual").value = "";
     document.getElementById("quantityManual").value = "";
     document.getElementById("rateManual").value = "";
@@ -3519,8 +3637,6 @@ async function updateRowManual() {
     document.getElementById("dimension1").value = "";
     document.getElementById("dimension2").value = "";
     document.getElementById("dimension3").value = "";
-
-    // Clear discount fields
     document.getElementById("discountType").value = "none";
     document.getElementById("discountValue").value = "";
 
@@ -3532,6 +3648,14 @@ async function updateRowManual() {
     document.getElementById('dimensionType').value = 'none';
     document.getElementById('measurementUnit').style.display = 'none';
     document.getElementById('dimensionInputs').style.display = 'none';
+
+    // Reset Convert Options
+    document.getElementById('toggleConvertBtn').style.display = 'none';
+    document.getElementById('toggleConvertBtn').classList.remove('active');
+    document.getElementById('convertUnit').style.display = 'none';
+    document.getElementById('convertUnit').value = 'none';
+    currentConvertUnit = 'none';
+
     currentDimensions = {
         type: 'none',
         unit: 'ft',
@@ -3594,7 +3718,7 @@ function duplicateRow(rowId) {
     const dimensionValues = JSON.parse(sourceRow.getAttribute('data-dimension-values') || '[0,0,0]');
     const dimensionUnit = sourceRow.getAttribute('data-dimension-unit') || 'ft';
 
-    // FIX: PROPERLY get toggle states from data attribute
+    // FIX: PROPERLY get toggle states
     const toggleStatesAttr = sourceRow.getAttribute('data-dimension-toggles');
     let toggleStates;
     try {
@@ -3611,6 +3735,9 @@ function duplicateRow(rowId) {
     const discountType = sourceRow.getAttribute('data-discount-type') || 'none';
     const discountValue = sourceRow.getAttribute('data-discount-value') || '';
 
+    // --- FIX: GET CONVERT UNIT ---
+    const convertUnit = sourceRow.getAttribute('data-convert-unit') || 'none';
+
     const unit = cells[3].textContent;
     const rate = parseFloat(cells[4].textContent);
     const amount = parseFloat(cells[5].textContent);
@@ -3618,20 +3745,41 @@ function duplicateRow(rowId) {
     // Create new unique ID
     const newId = 'row-manual-' + rowCounterManual++;
 
-    // FIX: Calculate final quantity using ACTUAL TOGGLE STATES
+    // --- FIX: Calculate final quantity using NEW CONVERSION LOGIC ---
     let finalQuantity = originalQuantity;
+
+    // 1. Determine dimensionality (power)
+    let power = 0;
     if (dimensionType !== 'none' && dimensionType !== 'dozen') {
-        // Calculate area considering toggle states
-        const calculatedArea = calculateAreaWithToggles(dimensionType, dimensionValues, toggleStates);
-        finalQuantity = originalQuantity * calculatedArea;
+        if (toggleStates.toggle1) power++;
+        if (['widthXheight', 'widthXdepth', 'lengthXdepth', 'lengthXheight', 'lengthXwidth', 'widthXheightXdepth', 'lengthXwidthXheight', 'lengthXheightXdepth', 'lengthXwidthXdepth'].includes(dimensionType)) {
+            if (toggleStates.toggle2) power++;
+        }
+        if (['widthXheightXdepth', 'lengthXwidthXheight', 'lengthXheightXdepth', 'lengthXwidthXdepth'].includes(dimensionType)) {
+            if (toggleStates.toggle3) power++;
+        }
+    }
+
+    // 2. Get Conversion Factor
+    const conversionFactor = getConversionFactor(dimensionUnit, convertUnit, power);
+
+    // 3. Calculate Final Quantity
+    if (dimensionType !== 'none' && dimensionType !== 'dozen') {
+        const calculatedArea = calculateAreaFromDimensions(dimensionType, dimensionValues);
+        // Apply toggles to calculation (simplified check, ideally use calculateAreaWithToggles if strict)
+        // But for duplication, we can rely on the source row's logic logic being consistent
+
+        // Re-calculate area with toggles specifically
+        let effectiveArea = calculateAreaWithToggles(dimensionType, dimensionValues, toggleStates);
+        finalQuantity = (originalQuantity * effectiveArea) * conversionFactor;
     } else if (dimensionType === 'dozen') {
         finalQuantity = originalQuantity / 12;
     }
 
-    // FIX: Get dimension text for display using actual toggle states
+    // Get dimension text
     const dimensionText = getDimensionDisplayText(dimensionType, dimensionValues, dimensionUnit, toggleStates);
 
-    // Create duplicate row with PROPER TOGGLE STATES
+    // Create duplicate row with PROPER CONVERT UNIT
     const newRow = createTableRowManual(
         newId,
         itemName,
@@ -3655,22 +3803,26 @@ function duplicateRow(rowId) {
         hsnCode,
         productCode,
         discountType,
-        discountValue
+        discountValue,
+        true, // dimensionsVisible
+        convertUnit // <--- PASS CONVERT UNIT
     );
 
     // Insert the duplicate below the source row
     sourceRow.parentNode.insertBefore(newRow, sourceRow.nextSibling);
 
-    // Sync to other tables with PROPER TOGGLE STATES
-    syncDuplicatedRowToOtherTables(newId, sourceRow, itemName, originalQuantity, unit, rate, amount, notes, dimensionType, dimensionValues, dimensionUnit, hsnCode, productCode, discountType, discountValue, finalQuantity, dimensionText, toggleStates);
+    // Sync to other tables
+    syncDuplicatedRowToOtherTables(newId, sourceRow, itemName, originalQuantity, unit, rate, amount, notes, dimensionType, dimensionValues, dimensionUnit, hsnCode, productCode, discountType, discountValue, finalQuantity, dimensionText, toggleStates, convertUnit);
 
     // Update everything
     updateSerialNumbers();
     updateTotal();
+    refreshCopyTableTotal(); // Ensure copy table total updates
     saveToLocalStorage();
     saveStateToHistory();
 
     if (isGSTMode) {
+        copyItemsToGSTBill(); // Ensure sync
         updateGSTTaxCalculation();
     }
 }
@@ -3691,7 +3843,7 @@ function calculateAreaFromDimensions(dimensionType, dimensionValues) {
 }
 
 // Sync duplicated row to other tables with toggle states
-function syncDuplicatedRowToOtherTables(newId, sourceRow, itemName, quantity, unit, rate, amount, notes, dimensionType, dimensionValues, dimensionUnit, hsnCode, productCode, discountType, discountValue, finalQuantity, dimensionText, toggleStates) {
+function syncDuplicatedRowToOtherTables(newId, sourceRow, itemName, quantity, unit, rate, amount, notes, dimensionType, dimensionValues, dimensionUnit, hsnCode, productCode, discountType, discountValue, finalQuantity, dimensionText, toggleStates, convertUnit = 'none') {
     // Sync to copyListManual (regular bill table)
     const copySourceRow = document.querySelector(`#copyListManual tr[data-id="${sourceRow.getAttribute('data-id')}"]`);
     if (copySourceRow) {
@@ -3718,7 +3870,9 @@ function syncDuplicatedRowToOtherTables(newId, sourceRow, itemName, quantity, un
             hsnCode,
             productCode,
             discountType,
-            discountValue
+            discountValue,
+            true, // dimensionsVisible default
+            convertUnit // <--- PASS CONVERT UNIT
         );
         copySourceRow.parentNode.insertBefore(copyRow, copySourceRow.nextSibling);
     }
@@ -3743,7 +3897,10 @@ function syncDuplicatedRowToOtherTables(newId, sourceRow, itemName, quantity, un
                 dimensionValues,
                 dimensionUnit,
                 hsnCode,
-                productCode
+                productCode,
+                discountType,
+                discountValue,
+                convertUnit // <--- PASS CONVERT UNIT
             );
             gstSourceRow.parentNode.insertBefore(gstRow, gstSourceRow.nextSibling);
         }
@@ -3783,7 +3940,7 @@ function toggleRowDimensions(rowId) {
     saveToLocalStorage();
     saveStateToHistory(); // ADDED: Capture dimension toggle in undo/redo history
 }
-function createTableRowManual(id, itemName, quantity, unit, rate, amount, notes, dimensions, editable, finalQuantity = 0, dimensionType = 'none', originalQuantity = 0, dimensionData = { values: [0, 0, 0], toggle1: true, toggle2: true, toggle3: true }, dimensionUnit = 'ft', hsnCode = '', productCode = '', discountType = 'none', discountValue = '', dimensionsVisible = true) { // ADD dimensionsVisible parameter
+function createTableRowManual(id, itemName, quantity, unit, rate, amount, notes, dimensions, editable, finalQuantity = 0, dimensionType = 'none', originalQuantity = 0, dimensionData = { values: [0, 0, 0], toggle1: true, toggle2: true, toggle3: true }, dimensionUnit = 'ft', hsnCode = '', productCode = '', discountType = 'none', discountValue = '', dimensionsVisible = true, convertUnit = 'none') {
     const tr = document.createElement("tr");
     tr.setAttribute("data-id", id);
 
@@ -3813,8 +3970,8 @@ function createTableRowManual(id, itemName, quantity, unit, rate, amount, notes,
     const numericRate = typeof rate === 'string' ? parseFloat(rate) : Number(rate);
     const numericAmount = typeof amount === 'string' ? parseFloat(amount) : Number(amount);
 
-
-    let particularsHtml = formatParticularsManual(itemName, notes, dimensions, displayQuantity, finalQuantity, numericRate, dimensionType, dimensionUnit, unit, discountType, discountValue, toggleStates);
+    // Pass convertUnit to formatParticularsManual
+    let particularsHtml = formatParticularsManual(itemName, notes, dimensions, displayQuantity, finalQuantity, numericRate, dimensionType, dimensionUnit, unit, discountType, discountValue, toggleStates, convertUnit);
 
     const removeFn = editable ? `removeRowManual('${id}')` : `removeRowManual('${id}', true)`;
 
@@ -3827,7 +3984,7 @@ function createTableRowManual(id, itemName, quantity, unit, rate, amount, notes,
                     <span class="material-icons">content_copy</span>
                 </button>
                 <button onclick="toggleRowDimensions('${id}')" class="action-btn dimensions-btn" title="Toggle Dimensions">
-                    <span class="material-icons">${dimensionsVisible ? 'layers' : 'layers_clear'}</span> <!-- FIX: Set correct icon -->
+                    <span class="material-icons">${dimensionsVisible ? 'layers' : 'layers_clear'}</span>
                 </button>
                 <button onclick="${removeFn}" class="action-btn remove-btn" title="Remove Item">
                     <span class="material-icons">close</span>
@@ -3841,29 +3998,32 @@ function createTableRowManual(id, itemName, quantity, unit, rate, amount, notes,
     tr.innerHTML = `
     <td class="sr-no"></td>
     <td>${particularsHtml}</td>
-    <td>${formattedDisplayQuantity}</td>  <!-- FIXED: Using formatted quantity -->
+    <td>${formattedDisplayQuantity}</td>
     <td>${unit}</td>
     <td>${numericRate.toFixed(2)}</td>
     <td class="amount">${numericAmount.toFixed(2)}</td>
     <td class="actions-cell">${actionsHtml}</td>
 `;
 
-    // Set dimension attributes including toggle states - FIX: Properly save toggle states
+    // Set dimension attributes including toggle states
     tr.setAttribute('data-dimension-type', dimensionType);
     tr.setAttribute('data-dimension-values', JSON.stringify(dimensionValues));
     tr.setAttribute('data-dimension-unit', dimensionUnit);
-    tr.setAttribute('data-dimension-toggles', JSON.stringify(toggleStates)); // FIX: Save toggle states
+    tr.setAttribute('data-dimension-toggles', JSON.stringify(toggleStates));
     tr.setAttribute('data-original-quantity', displayQuantity.toFixed(8));
 
     // SAFELY store original rate as number
     tr.setAttribute('data-original-rate', numericRate.toFixed(8));
 
-    // ADD THESE LINES:
+    // Set amounts
     tr.setAttribute('data-amount', storeWithPrecision(numericAmount));
     tr.setAttribute('data-rate', storeWithPrecision(numericRate));
 
-    // ADD THIS: Set dimension visibility attribute
+    // Set dimension visibility attribute
     tr.setAttribute('data-dimensions-visible', dimensionsVisible ? 'true' : 'false');
+
+    // Set Convert Unit attribute
+    tr.setAttribute('data-convert-unit', convertUnit);
 
     // Add HSN and product code data if provided
     if (hsnCode) {
@@ -3880,7 +4040,7 @@ function createTableRowManual(id, itemName, quantity, unit, rate, amount, notes,
     return tr;
 }
 
-function createGSTTableRowManual(id, itemName, quantity, unit, rate, amount, notes, dimensions, editable, finalQuantity = 0, dimensionType = 'none', originalQuantity = 0, dimensionValues = [0, 0, 0], dimensionUnit = 'ft', hsnCode = '', productCode = '', discountType = 'none', discountValue = '') {
+function createGSTTableRowManual(id, itemName, quantity, unit, rate, amount, notes, dimensions, editable, finalQuantity = 0, dimensionType = 'none', originalQuantity = 0, dimensionValues = [0, 0, 0], dimensionUnit = 'ft', hsnCode = '', productCode = '', discountType = 'none', discountValue = '', convertUnit = 'none') {
     const tr = document.createElement("tr");
     tr.setAttribute("data-id", id);
 
@@ -3890,8 +4050,8 @@ function createGSTTableRowManual(id, itemName, quantity, unit, rate, amount, not
     const numericRate = typeof rate === 'string' ? parseFloat(rate) : Number(rate);
     const numericAmount = typeof amount === 'string' ? parseFloat(amount) : Number(amount);
 
-    // FIXED: Pass discount params to format function
-    let particularsHtml = formatParticularsManual(itemName, notes, dimensions, displayQuantity, finalQuantity, numericRate, dimensionType, dimensionUnit, unit, discountType, discountValue);
+    // Pass convertUnit to formatParticularsManual (toggleStates is null here as GST table relies on saved calc)
+    let particularsHtml = formatParticularsManual(itemName, notes, dimensions, displayQuantity, finalQuantity, numericRate, dimensionType, dimensionUnit, unit, discountType, discountValue, null, convertUnit);
 
     const removeFn = `removeRowManual('${id}', true)`;
 
@@ -3911,8 +4071,8 @@ function createGSTTableRowManual(id, itemName, quantity, unit, rate, amount, not
     tr.setAttribute('data-dimension-unit', dimensionUnit);
     tr.setAttribute('data-original-quantity', displayQuantity.toFixed(8));
     tr.setAttribute('data-hsn', hsnCode);
+    tr.setAttribute('data-convert-unit', convertUnit);
 
-    // FIXED: Set Discount Attributes
     tr.setAttribute('data-discount-type', discountType);
     tr.setAttribute('data-discount-value', discountValue);
 
@@ -3967,7 +4127,7 @@ function editRowManual(id) {
     const dimensionValues = JSON.parse(row.getAttribute('data-dimension-values') || '[0,0,0]');
     const dimensionUnit = row.getAttribute('data-dimension-unit') || 'ft';
 
-    // FIX: Safe JSON parsing for dimension toggles
+    // Safe JSON parsing for dimension toggles
     const toggleStatesAttr = row.getAttribute('data-dimension-toggles');
     let toggleStates;
     try {
@@ -3979,16 +4139,16 @@ function editRowManual(id) {
 
     const originalQuantity = parseFloat(row.getAttribute('data-original-quantity') || cells[2].textContent);
 
-    // Get HSN, product code, and discount from data attributes
+    // Get HSN, product code, discount, and CONVERT UNIT
     const hsnCode = row.getAttribute('data-hsn') || '';
     const productCode = row.getAttribute('data-product-code') || '';
     const discountType = row.getAttribute('data-discount-type') || 'none';
     const discountValue = row.getAttribute('data-discount-value') || '';
+    const savedConvertUnit = row.getAttribute('data-convert-unit') || 'none';
 
     // Populate all fields
     document.getElementById("itemNameManual").value = itemName;
 
-    // FIX: Format quantity - remove .00 if whole number
     const formattedQuantity = originalQuantity % 1 === 0 ?
         originalQuantity.toString() :
         originalQuantity.toFixed(2);
@@ -3998,47 +4158,49 @@ function editRowManual(id) {
     document.getElementById("rateManual").value = parseFloat(cells[4].textContent).toFixed(2);
     document.getElementById("itemNotesManual").value = notesText;
 
-    // Populate HSN and product code fields
     document.getElementById("hsnCodeManual").value = hsnCode;
     document.getElementById("productCodeManual").value = productCode;
 
-    // POPULATE DISCOUNT FIELDS - THIS IS THE FIX
+    // --- RESTORE DISCOUNT STATE ---
     document.getElementById("discountType").value = discountType;
     document.getElementById("discountValue").value = discountValue;
 
-    // SHOW DISCOUNT INPUTS IF DISCOUNT EXISTS
     if (discountType !== 'none' && discountValue > 0) {
         document.getElementById("discount-inputs-container").style.display = 'flex';
+        // ACTIVATE BUTTON VISUALLY
         document.getElementById("toggleDiscountBtn").style.backgroundColor = '#27ae60';
+    } else {
+        document.getElementById("discount-inputs-container").style.display = 'none';
+        document.getElementById("toggleDiscountBtn").style.backgroundColor = '';
     }
 
+    // --- RESTORE DIMENSION STATE ---
     document.getElementById('dimensionType').value = dimensionType;
-    handleDimensionTypeChange();
+    handleDimensionTypeChange(); // This shows inputs based on type
 
-    // FIX: Only populate dimension values if they are non-zero and the item actually has dimensions
     if (dimensionType !== 'none' && dimensionType !== 'dozen') {
+        // ACTIVATE BUTTON VISUALLY
+        document.getElementById("dimension-inputs-container").style.display = 'flex';
+        document.getElementById("toggleDimensionBtn").style.backgroundColor = '#3498db';
+
+        // Show Convert Button since Dimensions are active
+        document.getElementById('toggleConvertBtn').style.display = 'inline-block';
+
         document.getElementById('measurementUnit').value = dimensionUnit;
         currentDimensions.unit = dimensionUnit;
 
-        // Only set dimension values if they are non-zero (item actually has dimensions)
-        // If all dimension values are 0, leave the inputs blank
         const hasActualDimensions = dimensionValues.some(val => val > 0);
 
         if (hasActualDimensions) {
             document.getElementById('dimension1').value = parseFloat(dimensionValues[0]).toFixed(2);
-            if (dimensionType === 'widthXheight' || dimensionType === 'widthXheightXdepth' ||
-                dimensionType === 'lengthXwidthXheight' || dimensionType === 'widthXdepth' ||
-                dimensionType === 'lengthXheightXdepth' || dimensionType === 'lengthXdepth' ||
-                dimensionType === 'lengthXheight' || dimensionType === 'lengthXwidth' ||
-                dimensionType === 'lengthXwidthXdepth') {
+            // Only fill 2 and 3 if applicable to type to keep UI clean
+            if (['widthXheight', 'widthXdepth', 'lengthXdepth', 'lengthXheight', 'lengthXwidth', 'widthXheightXdepth', 'lengthXwidthXheight', 'lengthXheightXdepth', 'lengthXwidthXdepth'].some(t => dimensionType.includes(t) || dimensionType === t)) {
                 document.getElementById('dimension2').value = parseFloat(dimensionValues[1]).toFixed(2);
             }
-            if (dimensionType === 'widthXheightXdepth' || dimensionType === 'lengthXwidthXheight' ||
-                dimensionType === 'lengthXheightXdepth' || dimensionType === 'lengthXwidthXdepth') {
+            if (['widthXheightXdepth', 'lengthXwidthXheight', 'lengthXheightXdepth', 'lengthXwidthXdepth'].some(t => dimensionType.includes(t) || dimensionType === t)) {
                 document.getElementById('dimension3').value = parseFloat(dimensionValues[2]).toFixed(2);
             }
         } else {
-            // Item originally had no dimensions - leave inputs blank
             document.getElementById('dimension1').value = '';
             document.getElementById('dimension2').value = '';
             document.getElementById('dimension3').value = '';
@@ -4046,21 +4208,30 @@ function editRowManual(id) {
 
         currentDimensions.values = dimensionValues;
 
-        // FIX: Set toggle states from saved data - ONLY if dimension type is not 'none'
+        // Set toggle states
         document.getElementById('dimension1-toggle').checked = toggleStates.toggle1;
-        if (dimensionType === 'widthXheight' || dimensionType === 'widthXheightXdepth' ||
-            dimensionType === 'lengthXwidthXheight' || dimensionType === 'widthXdepth' ||
-            dimensionType === 'lengthXheightXdepth' || dimensionType === 'lengthXdepth' ||
-            dimensionType === 'lengthXheight' || dimensionType === 'lengthXwidth' ||
-            dimensionType === 'lengthXwidthXdepth') {
-            document.getElementById('dimension2-toggle').checked = toggleStates.toggle2;
-        }
-        if (dimensionType === 'widthXheightXdepth' || dimensionType === 'lengthXwidthXheight' ||
-            dimensionType === 'lengthXheightXdepth' || dimensionType === 'lengthXwidthXdepth') {
-            document.getElementById('dimension3-toggle').checked = toggleStates.toggle3;
+        document.getElementById('dimension2-toggle').checked = toggleStates.toggle2;
+        document.getElementById('dimension3-toggle').checked = toggleStates.toggle3;
+
+        // --- RESTORE CONVERT UNIT STATE ---
+        if (savedConvertUnit && savedConvertUnit !== 'none') {
+            document.getElementById('toggleConvertBtn').classList.add('active'); // Make it purple
+            document.getElementById('convertUnit').style.display = 'inline-block';
+            document.getElementById('convertUnit').value = savedConvertUnit;
+            currentConvertUnit = savedConvertUnit;
+        } else {
+            document.getElementById('toggleConvertBtn').classList.remove('active'); // Reset color
+            document.getElementById('convertUnit').style.display = 'none';
+            document.getElementById('convertUnit').value = 'none';
+            currentConvertUnit = 'none';
         }
 
         calculateDimensions();
+    } else {
+        // Reset if no dimensions
+        document.getElementById("dimension-inputs-container").style.display = 'none';
+        document.getElementById("toggleDimensionBtn").style.backgroundColor = '';
+        document.getElementById('toggleConvertBtn').style.display = 'none'; // Hide convert
     }
 
     document.getElementById("addItemBtnManual").style.display = "none";
@@ -4100,6 +4271,71 @@ function updateSerialNumbers() {
         });
     });
 }
+let isRegularFooterVisible = false;
+
+function toggleRegularFooter() {
+    const footer = document.getElementById('regular-bill-footer');
+    const btn = document.getElementById('reg-footer-btn');
+
+    isRegularFooterVisible = !isRegularFooterVisible;
+
+    if (footer) {
+        footer.style.display = isRegularFooterVisible ? 'table' : 'none';
+    }
+
+    if (btn) {
+        btn.style.backgroundColor = isRegularFooterVisible ? '#27ae60' : '';
+    }
+
+    // Update info if showing
+    if (isRegularFooterVisible) {
+        updateRegularFooterInfo();
+        // Also update amount in words immediately
+        updateTotal();
+    }
+}
+
+function updateRegularFooterInfo() {
+    if (!companyInfo) return;
+
+    // Update Text Fields
+    const signatory = document.getElementById('reg-bill-company-signatory');
+    const accHolder = document.getElementById('reg-bill-account-holder');
+    const accNo = document.getElementById('reg-bill-account-number');
+    const ifsc = document.getElementById('reg-bill-ifsc-code');
+    const branch = document.getElementById('reg-bill-branch');
+    const bank = document.getElementById('reg-bill-bank-name');
+
+    if (signatory) signatory.textContent = `for ${companyInfo.name || 'COMPANY NAME'}`;
+    if (accHolder) accHolder.textContent = companyInfo.accountHolder || '-';
+    if (accNo) accNo.textContent = companyInfo.accountNumber || '-';
+    if (ifsc) ifsc.textContent = companyInfo.ifscCode || '-';
+    if (branch) branch.textContent = companyInfo.branch || '-';
+    if (bank) bank.textContent = companyInfo.bankName || '-';
+
+    // Update Branding (Sign & Stamp) for Regular Bill
+    const regStampCell = document.getElementById('reg-stamp-cell');
+    const regSignatureCell = document.getElementById('reg-signature-cell');
+
+    if (regStampCell && regSignatureCell && brandingSettings) {
+        regStampCell.innerHTML = '';
+        regSignatureCell.innerHTML = '';
+
+        if (brandingSettings.stamp) {
+            const stampImg = document.createElement('img');
+            stampImg.src = brandingSettings.stamp;
+            stampImg.className = 'bill-stamp';
+            regStampCell.appendChild(stampImg);
+        }
+
+        if (brandingSettings.signature) {
+            const signImg = document.createElement('img');
+            signImg.src = brandingSettings.signature;
+            signImg.className = 'bill-signature';
+            regSignatureCell.appendChild(signImg);
+        }
+    }
+}
 
 function updateTotal() {
     const vars = getModeSpecificVars();
@@ -4107,7 +4343,6 @@ function updateTotal() {
     const totalAmountId = vars.totalAmountId;
     const copyTotalAmountId = vars.copyTotalAmountId;
 
-    // Calculate total from input table
     const total = Array.from(document.querySelectorAll(`#${createListId} tbody tr[data-id]`))
         .reduce((sum, row) => {
             const amountCell = row.querySelector('.amount');
@@ -4119,39 +4354,30 @@ function updateTotal() {
             return sum;
         }, 0);
 
-    // Always update the input table total
     document.getElementById(totalAmountId).textContent = roundToTwoDecimals(total).toFixed(2);
 
-    // FIX: Always update the copy table total too
     const copyTotalElement = document.getElementById(copyTotalAmountId);
     if (copyTotalElement) {
         copyTotalElement.textContent = roundToTwoDecimals(total).toFixed(2);
     }
 
-    // FIX: ALWAYS update discount row, regardless of bill container visibility
     const discountRow = document.getElementById('discount-row');
     const discountPercentSpan = document.getElementById('discount-percent');
     const discountAmountTd = document.getElementById('discount-amount');
 
-    // Calculate discount amount based on current discount type
     let discountAmountValue = 0;
     if (discountPercent > 0) {
-        // Percent mode: Calculate amount from percent
         discountAmountValue = storeWithPrecision(total * (discountPercent / 100));
     } else if (discountAmount > 0) {
-        // Amount mode: Use stored amount directly
         discountAmountValue = discountAmount;
-        // Percent is already calculated in applyDiscountSettings for display
     }
 
     const displayDiscountAmount = roundToTwoDecimals(discountAmountValue);
 
-    // FIX: Always update discount row visibility
     if ((discountPercent > 0 || discountAmount > 0) && discountAmountValue > 0) {
         if (discountRow) discountRow.style.display = '';
         if (discountPercentSpan) discountPercentSpan.textContent = roundToTwoDecimals(discountPercent);
         if (discountAmountTd) discountAmountTd.textContent = `-${displayDiscountAmount}`;
-
         if (discountRow && discountRow.cells[0]) {
             discountRow.cells[0].textContent = `Discount (${roundToTwoDecimals(discountPercent)}%)`;
         }
@@ -4159,7 +4385,7 @@ function updateTotal() {
         if (discountRow) discountRow.style.display = 'none';
     }
 
-    // Only update GST elements if bill container is visible
+    // Regular Bill Logic
     const billContainer = document.getElementById('bill-container');
     if (billContainer && billContainer.style.display !== 'none') {
         const gstRow = document.getElementById('gst-row');
@@ -4168,33 +4394,46 @@ function updateTotal() {
         const grandTotalRow = document.getElementById('grand-total-row');
         const grandTotalAmount = document.getElementById('grand-total-amount');
 
+        let finalTotalForWords = total;
+
         if (gstPercent > 0) {
             if (gstRow) gstRow.style.display = '';
             if (gstPercentSpan) gstPercentSpan.textContent = gstPercent;
 
-            // Calculate GST on amount after discount
             const amountAfterDiscount = total - discountAmountValue;
             const gstAmount = amountAfterDiscount * (gstPercent / 100);
 
             if (gstAmountTd) gstAmountTd.textContent = `+${roundToTwoDecimals(gstAmount)}`;
             if (grandTotalRow) grandTotalRow.style.display = '';
-            if (grandTotalAmount) grandTotalAmount.textContent = roundToTwoDecimals(amountAfterDiscount + gstAmount);
+
+            const grandTotal = roundToTwoDecimals(amountAfterDiscount + gstAmount);
+            if (grandTotalAmount) grandTotalAmount.textContent = grandTotal;
+            finalTotalForWords = grandTotal;
         } else {
             if (gstRow) gstRow.style.display = 'none';
             if (grandTotalRow) grandTotalRow.style.display = 'none';
         }
 
-        // Show grand total if there's discount but no GST
+        // If Discount exists but no GST, final total is subtotal - discount
         if ((discountPercent > 0 || discountAmount > 0) && gstPercent === 0) {
             if (grandTotalRow) grandTotalRow.style.display = '';
             const amountAfterDiscount = total - discountAmountValue;
-            if (grandTotalAmount) grandTotalAmount.textContent = roundToTwoDecimals(amountAfterDiscount);
+            const grandTotal = roundToTwoDecimals(amountAfterDiscount);
+            if (grandTotalAmount) grandTotalAmount.textContent = grandTotal;
+            finalTotalForWords = grandTotal;
+        }
+
+        // Update Amount in Words for Regular Bill
+        const wordsElement = document.getElementById('reg-bill-amount-words');
+        if (wordsElement) {
+            // Round to whole number for words
+            const words = convertNumberToWords(Math.round(finalTotalForWords));
+            wordsElement.textContent = `Rupees ${words} Only`;
         }
     }
 }
 
 
-// Helper to create items from saved data
 // Helper to create items from saved data
 function createItemInAllTablesFromSaved(itemData) {
     const createListTbody = document.querySelector("#createListManual tbody");
@@ -4206,8 +4445,8 @@ function createItemInAllTablesFromSaved(itemData) {
         itemData.itemName,
         itemData.quantity,
         itemData.unit,
-        parseFloat(itemData.rate), // Ensure rate is number
-        parseFloat(itemData.amount), // Ensure amount is number
+        parseFloat(itemData.rate),
+        parseFloat(itemData.amount),
         itemData.notes,
         '', // dimension text will come from particularsHtml
         true,
@@ -4219,14 +4458,14 @@ function createItemInAllTablesFromSaved(itemData) {
             toggle1: itemData.dimensionToggles?.toggle1 !== false,
             toggle2: itemData.dimensionToggles?.toggle2 !== false,
             toggle3: itemData.dimensionToggles?.toggle3 !== false
-        }, // ADDED: Handle toggle states
+        },
         itemData.dimensionUnit,
         itemData.hsnCode,
         itemData.productCode,
         itemData.discountType,
         itemData.discountValue,
-        // ADD THIS: Pass dimensionsVisible state
-        itemData.dimensionsVisible !== false // Default to true if undefined
+        itemData.dimensionsVisible !== false,
+        itemData.convertUnit // <--- PASS THIS
     );
 
     // Use saved particulars HTML if available
@@ -4245,8 +4484,8 @@ function createItemInAllTablesFromSaved(itemData) {
         itemData.itemName,
         itemData.quantity,
         itemData.unit,
-        parseFloat(itemData.rate), // Ensure rate is number
-        parseFloat(itemData.amount), // Ensure amount is number
+        parseFloat(itemData.rate),
+        parseFloat(itemData.amount),
         itemData.notes,
         '',
         false,
@@ -4258,14 +4497,14 @@ function createItemInAllTablesFromSaved(itemData) {
             toggle1: itemData.dimensionToggles?.toggle1 !== false,
             toggle2: itemData.dimensionToggles?.toggle2 !== false,
             toggle3: itemData.dimensionToggles?.toggle3 !== false
-        }, // ADDED: Handle toggle states
+        },
         itemData.dimensionUnit,
         itemData.hsnCode,
         itemData.productCode,
         itemData.discountType,
         itemData.discountValue,
-        // ADD THIS: Pass dimensionsVisible state
-        itemData.dimensionsVisible !== false // Default to true if undefined
+        itemData.dimensionsVisible !== false,
+        itemData.convertUnit // <--- PASS THIS
     );
 
     if (itemData.particularsHtml) {
@@ -4286,8 +4525,8 @@ function createItemInAllTablesFromSaved(itemData) {
                 itemData.itemName,
                 itemData.quantity,
                 itemData.unit,
-                parseFloat(itemData.rate), // Ensure rate is number
-                parseFloat(itemData.amount), // Ensure amount is number
+                parseFloat(itemData.rate),
+                parseFloat(itemData.amount),
                 itemData.notes,
                 '',
                 false,
@@ -4297,7 +4536,10 @@ function createItemInAllTablesFromSaved(itemData) {
                 itemData.dimensionValues,
                 itemData.dimensionUnit,
                 itemData.hsnCode,
-                itemData.productCode
+                itemData.productCode,
+                itemData.discountType,
+                itemData.discountValue,
+                itemData.convertUnit // <--- PASS THIS
             );
 
             if (itemData.particularsHtml) {
@@ -4752,7 +4994,7 @@ async function saveToLocalStorage() {
         const createListId = vars.createListId;
 
         const data = {
-            tableStructure: [], // CHANGED: Save complete table structure
+            tableStructure: [],
             company: {
                 name: document.getElementById("companyName").textContent,
                 address: document.getElementById("companyAddr").textContent,
@@ -4776,22 +5018,16 @@ async function saveToLocalStorage() {
                 discountVisible: discountPercent > 0 && discountAmount > 0,
                 gstVisible: gstPercent > 0
             },
-            //Save terms data
             termsData: getTermsData(),
             gstCustomerData: await getGSTCustomerDataForSave()
         };
 
-        // CHANGED: Save complete table structure in exact order
         document.querySelectorAll(`#${createListId} tbody tr`).forEach(row => {
-            // In saveToLocalStorage() function, update the section saving part:
-            // In saveToLocalStorage() function, modify the section saving part:
             if (row.classList.contains('section-row')) {
-                // Save section data
                 const sectionId = row.getAttribute('data-section-id');
                 const cell = row.querySelector('td');
                 const collapseBtn = row.querySelector('.collapse-btn');
 
-                // Extract ONLY the section name (first text node) without any button text
                 let sectionName = '';
                 for (let node of cell.childNodes) {
                     if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
@@ -4800,13 +5036,10 @@ async function saveToLocalStorage() {
                     }
                 }
 
-                // FIX: Only save HTML for input table, but create clean HTML without buttons
                 let htmlContent = '';
                 if (row.closest('#createListManual')) {
-                    // For input table, save the complete HTML with buttons
                     htmlContent = cell.innerHTML;
                 } else {
-                    // For bill view tables, save only the section name
                     htmlContent = sectionName;
                 }
 
@@ -4817,17 +5050,14 @@ async function saveToLocalStorage() {
                     style: cell.getAttribute('style') || '',
                     collapsed: collapseBtn ? collapseBtn.textContent === '+' : false,
                     html: htmlContent,
-                    // ADD THIS: Track which table this section came from
                     sourceTable: row.closest('table')?.id || 'createListManual'
                 });
             } else if (row.getAttribute('data-id')) {
-                // Save item data
                 const cells = row.children;
                 const particularsDiv = cells[1];
                 const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
                 const notes = particularsDiv.querySelector('.notes')?.textContent || '';
 
-                // FIXED: Safe JSON parsing for dimension data
                 const dimensionType = row.getAttribute('data-dimension-type') || 'none';
                 const dimensionValuesAttr = row.getAttribute('data-dimension-values');
                 const dimensionValues = dimensionValuesAttr ? JSON.parse(dimensionValuesAttr) : [0, 0, 0];
@@ -4842,6 +5072,9 @@ async function saveToLocalStorage() {
                 const discountType = row.getAttribute('data-discount-type') || 'none';
                 const discountValue = row.getAttribute('data-discount-value') || '';
 
+                // --- SAVE CONVERT UNIT ---
+                const convertUnit = row.getAttribute('data-convert-unit') || 'none';
+
                 data.tableStructure.push({
                     type: 'item',
                     id: row.getAttribute('data-id'),
@@ -4855,13 +5088,13 @@ async function saveToLocalStorage() {
                     dimensionValues: dimensionValues,
                     dimensionUnit: dimensionUnit,
                     dimensionToggles: toggleStates,
+                    convertUnit: convertUnit, // <--- SAVED HERE
                     hsnCode: hsnCode,
                     productCode: productCode,
                     discountType: discountType,
                     discountValue: discountValue,
                     particularsHtml: particularsDiv.innerHTML,
                     displayQuantity: cells[2].textContent,
-                    // ADD THIS LINE:
                     dimensionsVisible: row.getAttribute('data-dimensions-visible') === 'true'
                 });
             }
@@ -4882,7 +5115,7 @@ function saveStateToHistory() {
     }
 
     const state = {
-        tableStructure: [], // NEW: Save complete table structure in exact order
+        tableStructure: [],
         company: {
             name: document.getElementById("companyName").textContent,
             address: document.getElementById("companyAddr").textContent,
@@ -4903,16 +5136,12 @@ function saveStateToHistory() {
         }
     };
 
-    // NEW: Save complete table structure in exact order (same as saveToLocalStorage)
     document.querySelectorAll(`#createListManual tbody tr`).forEach(row => {
-        // In saveStateToHistory() function, do the same fix:
         if (row.classList.contains('section-row')) {
-            // Save section data
             const sectionId = row.getAttribute('data-section-id');
             const cell = row.querySelector('td');
             const collapseBtn = row.querySelector('.collapse-btn');
 
-            // Extract ONLY the section name (first text node) without any button text
             let sectionName = '';
             for (let node of cell.childNodes) {
                 if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
@@ -4921,7 +5150,6 @@ function saveStateToHistory() {
                 }
             }
 
-            // FIX: Save the complete HTML with event.stopPropagation()
             const completeHTML = cell.innerHTML;
 
             state.tableStructure.push({
@@ -4930,11 +5158,9 @@ function saveStateToHistory() {
                 name: sectionName,
                 style: cell.getAttribute('style') || '',
                 collapsed: collapseBtn ? collapseBtn.textContent === '+' : false,
-                // ADD THIS: Save complete HTML with proper event handlers
                 html: completeHTML
             });
         } else if (row.getAttribute('data-id')) {
-            // Save item data
             const cells = row.children;
             const particularsDiv = cells[1];
             const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
@@ -4942,26 +5168,27 @@ function saveStateToHistory() {
 
             const particularsHtml = particularsDiv.innerHTML;
 
-            // FIXED: Safe JSON parsing for dimension data
             const dimensionType = row.getAttribute('data-dimension-type') || 'none';
             const dimensionValuesAttr = row.getAttribute('data-dimension-values');
             const dimensionValues = dimensionValuesAttr ? JSON.parse(dimensionValuesAttr) : [0, 0, 0];
             const dimensionUnit = row.getAttribute('data-dimension-unit') || 'ft';
 
-            // FIX: Safe JSON parsing for dimension toggles
             const toggleStatesAttr = row.getAttribute('data-dimension-toggles');
             let toggleStates;
             try {
                 toggleStates = toggleStatesAttr && toggleStatesAttr !== 'undefined' ? JSON.parse(toggleStatesAttr) : { toggle1: true, toggle2: true, toggle3: true };
             } catch (e) {
-                console.warn('Invalid toggle states in saveStateToHistory, using defaults:', e);
                 toggleStates = { toggle1: true, toggle2: true, toggle3: true };
             }
 
             const originalQuantity = parseFloat(row.getAttribute('data-original-quantity') || cells[2].textContent);
+            const hsnCode = row.getAttribute('data-hsn') || '';
+            const productCode = row.getAttribute('data-product-code') || '';
+            const discountType = row.getAttribute('data-discount-type') || 'none';
+            const discountValue = row.getAttribute('data-discount-value') || '';
 
-            // FIX: Save dimensions visibility state
-            const dimensionsVisible = row.getAttribute('data-dimensions-visible') === 'true';
+            // --- SAVE CONVERT UNIT ---
+            const convertUnit = row.getAttribute('data-convert-unit') || 'none';
 
             state.tableStructure.push({
                 type: 'item',
@@ -4976,9 +5203,13 @@ function saveStateToHistory() {
                 dimensionValues: dimensionValues,
                 dimensionUnit: dimensionUnit,
                 dimensionToggles: toggleStates,
+                convertUnit: convertUnit, // <--- SAVED HERE
+                hsnCode: hsnCode,
+                productCode: productCode,
+                discountType: discountType,
+                discountValue: discountValue,
                 particularsHtml: particularsHtml,
                 displayQuantity: cells[2].textContent,
-                // ADD THIS LINE to preserve dimension visibility in undo/redo:
                 dimensionsVisible: row.getAttribute('data-dimensions-visible') === 'true'
             });
         }
@@ -5044,16 +5275,13 @@ function restoreStateFromHistory() {
 
     let maxId = 0;
 
-    // NEW: Restore table structure in exact saved order
     if (state.tableStructure && state.tableStructure.length > 0) {
         state.tableStructure.forEach(rowData => {
             if (rowData.type === 'section') {
                 createSectionInAllTablesFromSaved(rowData);
             } else if (rowData.type === 'item') {
-                // FIX: Safe handling for dimension toggles
                 const toggleStates = rowData.dimensionToggles || { toggle1: true, toggle2: true, toggle3: true };
 
-                // Create item in all tables
                 createItemInAllTablesFromSaved({
                     type: 'item',
                     id: rowData.id,
@@ -5073,8 +5301,8 @@ function restoreStateFromHistory() {
                     discountValue: rowData.discountValue,
                     particularsHtml: rowData.particularsHtml,
                     displayQuantity: rowData.displayQuantity,
-                    // ADD THIS LINE:
-                    dimensionsVisible: rowData.dimensionsVisible !== false // Use saved state
+                    dimensionsVisible: rowData.dimensionsVisible !== false,
+                    convertUnit: rowData.convertUnit // <--- CRITICAL FIX
                 });
 
                 const idNum = parseInt(rowData.id.split('-')[2]);
@@ -5084,28 +5312,6 @@ function restoreStateFromHistory() {
         rowCounterManual = maxId + 1;
     }
 
-    // APPLY DIMENSION VISIBILITY RESTORATION AFTER ALL ITEMS ARE CREATED
-    if (state.tableStructure && state.tableStructure.length > 0) {
-        state.tableStructure.forEach(rowData => {
-            if (rowData.type === 'item' && rowData.dimensionsVisible !== undefined) {
-                const row = document.querySelector(`#createListManual tr[data-id="${rowData.id}"]`);
-                if (row) {
-                    row.setAttribute('data-dimensions-visible', rowData.dimensionsVisible ? 'true' : 'false');
-                    const dimensionsDiv = row.querySelector('.dimensions');
-                    if (dimensionsDiv) {
-                        dimensionsDiv.style.display = rowData.dimensionsVisible ? 'block' : 'none';
-                    }
-                    // Update toggle button icon
-                    const dimensionsBtn = row.querySelector('.dimensions-btn .material-icons');
-                    if (dimensionsBtn) {
-                        dimensionsBtn.textContent = rowData.dimensionsVisible ? 'layers' : 'layers_clear';
-                    }
-                }
-            }
-        });
-    }
-
-    // Apply collapse states to sections
     if (state.tableStructure) {
         state.tableStructure.forEach(rowData => {
             if (rowData.type === 'section' && rowData.collapsed) {
@@ -5130,12 +5336,8 @@ function restoreStateFromHistory() {
     updateGSTINVisibility();
     saveToLocalStorage();
 
-    // Initialize drag and drop for all rows
     initializeDragAndDrop();
-
-    // FIX: Apply final quantity formatting to ensure consistency
     formatAllQuantitiesAfterRestore();
-    // Update column visibility after restoring state
     updateColumnVisibility();
 }
 
@@ -5184,7 +5386,7 @@ async function saveToHistory() {
         const date = document.getElementById("billDate").value.trim() || new Date().toLocaleDateString();
 
         const currentData = {
-            tableStructure: [], // NEW: Use same structure as undo/redo
+            tableStructure: [],
             company: {
                 name: document.getElementById("companyName").textContent,
                 address: document.getElementById("companyAddr").textContent,
@@ -5210,15 +5412,13 @@ async function saveToHistory() {
         const createListId = vars.createListId;
         let totalAmount = 0;
 
-        // NEW: Save complete table structure in exact order
+        // Save complete table structure in exact order
         document.querySelectorAll(`#${createListId} tbody tr`).forEach(row => {
             if (row.classList.contains('section-row')) {
-                // Save section data
                 const sectionId = row.getAttribute('data-section-id');
                 const cell = row.querySelector('td');
                 const collapseBtn = row.querySelector('.collapse-btn');
 
-                // Extract ONLY the section name (first text node) without any button text
                 let sectionName = '';
                 for (let node of cell.childNodes) {
                     if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
@@ -5235,7 +5435,6 @@ async function saveToHistory() {
                     collapsed: collapseBtn ? collapseBtn.textContent === '+' : false
                 });
             } else if (row.getAttribute('data-id')) {
-                // Save item data
                 const cells = row.children;
                 const particularsDiv = cells[1];
                 const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
@@ -5245,9 +5444,27 @@ async function saveToHistory() {
 
                 const particularsHtml = particularsDiv.innerHTML;
                 const dimensionType = row.getAttribute('data-dimension-type') || 'none';
-                const dimensionValues = JSON.parse(row.getAttribute('data-dimension-values') || '[0,0,0]');
+                const dimensionValuesAttr = row.getAttribute('data-dimension-values');
+                const dimensionValues = dimensionValuesAttr ? JSON.parse(dimensionValuesAttr) : [0, 0, 0];
                 const dimensionUnit = row.getAttribute('data-dimension-unit') || 'ft';
+
+                // Safe JSON parsing for dimension toggles
+                const toggleStatesAttr = row.getAttribute('data-dimension-toggles');
+                let toggleStates;
+                try {
+                    toggleStates = toggleStatesAttr && toggleStatesAttr !== 'undefined' ? JSON.parse(toggleStatesAttr) : { toggle1: true, toggle2: true, toggle3: true };
+                } catch (e) {
+                    toggleStates = { toggle1: true, toggle2: true, toggle3: true };
+                }
+
                 const originalQuantity = parseFloat(row.getAttribute('data-original-quantity') || cells[2].textContent);
+                const hsnCode = row.getAttribute('data-hsn') || '';
+                const productCode = row.getAttribute('data-product-code') || '';
+                const discountType = row.getAttribute('data-discount-type') || 'none';
+                const discountValue = row.getAttribute('data-discount-value') || '';
+
+                // --- SAVE CONVERT UNIT ---
+                const convertUnit = row.getAttribute('data-convert-unit') || 'none';
 
                 currentData.tableStructure.push({
                     type: 'item',
@@ -5261,6 +5478,12 @@ async function saveToHistory() {
                     dimensionType: dimensionType,
                     dimensionValues: dimensionValues,
                     dimensionUnit: dimensionUnit,
+                    dimensionToggles: toggleStates,
+                    convertUnit: convertUnit, // <--- CRITICAL: Save this attribute
+                    hsnCode: hsnCode,
+                    productCode: productCode,
+                    discountType: discountType,
+                    discountValue: discountValue,
                     particularsHtml: particularsHtml,
                     displayQuantity: cells[2].textContent,
                     dimensionsVisible: row.getAttribute('data-dimensions-visible') === 'true'
@@ -5278,6 +5501,7 @@ async function saveToHistory() {
 
         if (history.length > 0) {
             const lastItem = history[0];
+            // Simple check to avoid duplicate saves of the exact same state
             if (JSON.stringify(lastItem.data.tableStructure) === JSON.stringify(currentData.tableStructure) &&
                 lastItem.data.customer.name === currentData.customer.name &&
                 lastItem.data.customer.billNo === currentData.customer.billNo) {
@@ -5366,7 +5590,6 @@ async function removeHistoryItem(id, event) {
 }
 
 async function loadFromHistory(item) {
-
     if (!item.data) return;
 
     const data = item.data;
@@ -5388,10 +5611,8 @@ async function loadFromHistory(item) {
             discountAmount = data.taxSettings.discountAmount || 0;
             gstPercent = data.taxSettings.gstPercent || 0;
 
-            // SAVE TAX SETTINGS FIRST
             await saveTaxSettings();
         }
-
 
         const createListTbody = document.querySelector("#createListManual tbody");
         const copyListTbody = document.querySelector("#copyListManual tbody");
@@ -5406,7 +5627,8 @@ async function loadFromHistory(item) {
                 if (rowData.type === 'section') {
                     createSectionInAllTablesFromSaved(rowData);
                 } else if (rowData.type === 'item') {
-                    // Create item in all tables
+                    const toggleStates = rowData.dimensionToggles || { toggle1: true, toggle2: true, toggle3: true };
+
                     createItemInAllTablesFromSaved({
                         type: 'item',
                         id: rowData.id,
@@ -5419,37 +5641,25 @@ async function loadFromHistory(item) {
                         dimensionType: rowData.dimensionType,
                         dimensionValues: rowData.dimensionValues,
                         dimensionUnit: rowData.dimensionUnit,
+                        dimensionToggles: toggleStates,
                         hsnCode: rowData.hsnCode,
                         productCode: rowData.productCode,
                         discountType: rowData.discountType,
                         discountValue: rowData.discountValue,
                         particularsHtml: rowData.particularsHtml,
-                        displayQuantity: rowData.displayQuantity
+                        displayQuantity: rowData.displayQuantity,
+                        dimensionsVisible: rowData.dimensionsVisible !== false,
+                        convertUnit: rowData.convertUnit // <--- CRITICAL FIX
                     });
 
                     const idNum = parseInt(rowData.id.split('-')[2]);
                     if (idNum > maxId) maxId = idNum;
-
-                    // Restore dimension visibility state
-                    const row = document.querySelector(`#createListManual tr[data-id="${rowData.id}"]`);
-                    if (row && rowData.dimensionsVisible !== undefined) {
-                        row.setAttribute('data-dimensions-visible', rowData.dimensionsVisible ? 'true' : 'false');
-                        const dimensionsDiv = row.querySelector('.dimensions');
-                        if (dimensionsDiv) {
-                            dimensionsDiv.style.display = rowData.dimensionsVisible ? 'block' : 'none';
-                        }
-                        // Update toggle button icon
-                        const dimensionsBtn = row.querySelector('.dimensions-btn .material-icons');
-                        if (dimensionsBtn) {
-                            dimensionsBtn.textContent = rowData.dimensionsVisible ? 'layers' : 'layers_clear';
-                        }
-                    }
                 }
             });
             rowCounterManual = maxId + 1;
         }
 
-        // Apply collapse states to sections
+        // Apply collapse states
         if (data.tableStructure) {
             data.tableStructure.forEach(rowData => {
                 if (rowData.type === 'section' && rowData.collapsed) {
@@ -5473,9 +5683,9 @@ async function loadFromHistory(item) {
         updateTotal();
         updateGSTINVisibility();
         await saveToLocalStorage();
+
         // UPDATE DIALOG BOXES
         setTimeout(() => {
-            // Update discount dialog
             const discountTypeSelect = document.getElementById('discount-type-select');
             const discountPercentInput = document.getElementById('discount-percent-input');
             const discountAmountInput = document.getElementById('discount-amount-input');
@@ -5490,28 +5700,22 @@ async function loadFromHistory(item) {
                 if (discountTypeSelect) discountTypeSelect.value = 'none';
             }
 
-            // Update GST dialog
             const gstInput = document.getElementById('gst-input');
             if (gstInput) gstInput.value = gstPercent;
 
-            // Update UI
             handleDiscountTypeChange();
         }, 100);
+
         saveStateToHistory();
-
-        // Initialize drag and drop for all rows
         initializeDragAndDrop();
-
         closeHistoryModal();
+        updateColumnVisibility();
 
         console.log('Bill restored successfully from history');
     } else {
-        // Handle empty or invalid history item
         console.log('No data found in this history item');
         showNotification('No data found in this history item');
     }
-    // Update column visibility after loading from history
-    updateColumnVisibility();
 }
 
 function openDiscountModal() {
@@ -5653,15 +5857,33 @@ function closeGSTModal() {
 
 // Add this NEW function to update GSTIN field visibility
 function updateGSTINVisibility() {
-    const customerGSTIN = document.getElementById('custGSINTd');
-    const companyGSTIN = document.getElementById('companyGstin');
+    const customerGSTINTd = document.getElementById('custGSINTd');
+    const companyGSTINLine = document.getElementById('reg-header-gstin-line');
+    const companyGSTINSpan = document.getElementById('companyGstin');
 
     if (gstPercent > 0) {
-        customerGSTIN.style.display = 'inline-block';
-        companyGSTIN.style.display = 'block';
+        // 1. Show Customer GSTIN Input
+        if (customerGSTINTd) customerGSTINTd.style.display = ''; // Reset to default (table-cell)
+
+        // 2. Show Company GSTIN Line (Only if text exists)
+        if (companyGSTINLine) {
+            const hasText = companyGSTINSpan && 
+                          companyGSTINSpan.textContent && 
+                          companyGSTINSpan.textContent.trim() !== '' &&
+                          companyGSTINSpan.textContent !== 'Your 15-digit GSTIN';
+            
+            companyGSTINLine.style.display = hasText ? 'block' : 'none';
+        }
+
+        // 3. FIX: Ensure the number sits next to the label (Inline)
+        if (companyGSTINSpan) {
+            companyGSTINSpan.style.display = 'inline';
+        }
+
     } else {
-        customerGSTIN.style.display = 'none';
-        companyGSTIN.style.display = 'none';
+        // Hide everything if GST is 0%
+        if (customerGSTINTd) customerGSTINTd.style.display = 'none';
+        if (companyGSTINLine) companyGSTINLine.style.display = 'none';
     }
 }
 
@@ -6502,6 +6724,7 @@ function toggleView() {
     const manual = document.getElementById("manual-item-container");
     const viewText = document.getElementById('view-text');
     const viewIcon = document.getElementById('view-icon');
+    const regFooterBtn = document.getElementById('reg-footer-btn'); // NEW
 
     currentView = currentView === 'input' ? 'bill' : 'input';
 
@@ -6511,37 +6734,31 @@ function toggleView() {
         viewIcon.textContent = "edit";
 
         if (isGSTMode) {
-            // Show GST bill layout
             bill.style.display = "none";
             gstBill.style.display = "block";
-
-            // Update GST bill with current data
             updateGSTBillDisplay();
-
-            // Hide columns for GST bill
             hideTableColumn(document.getElementById("gstCopyListManual"), 8, "none");
             hideTableColumn(document.getElementById("gstCopyListManual"), 7, "none");
+
+            if (regFooterBtn) regFooterBtn.style.display = 'none'; // Hide reg footer btn in GST
         } else {
-            // Show regular bill layout
             bill.style.display = "block";
             gstBill.style.display = "none";
-
-            // Hide columns for regular bill
             hideTableColumn(document.getElementById("copyListManual"), 7, "none");
             hideTableColumn(document.getElementById("copyListManual"), 6, "none");
-
-            // FIX: Refresh discount row after switching to bill view
             updateTotal();
+
+            if (regFooterBtn) regFooterBtn.style.display = 'inline-block'; // Show reg footer btn
         }
     } else {
-        // Show input mode
         bill.style.display = "none";
         gstBill.style.display = "none";
         manual.style.display = "block";
         viewText.textContent = "SHOW BILL";
         viewIcon.textContent = "description";
 
-        // Show columns again
+        if (regFooterBtn) regFooterBtn.style.display = 'none'; // Hide in input mode
+
         if (isGSTMode) {
             hideTableColumn(document.getElementById("gstCopyListManual"), 8, "table-cell");
             hideTableColumn(document.getElementById("gstCopyListManual"), 7, "table-cell");
@@ -7339,131 +7556,101 @@ function toggleGSTInclusive() {
 
 
 function updateUIForGSTMode() {
-    console.log('updateUIForGSTMode called, isGSTMode:', isGSTMode);
-
     document.body.classList.toggle('gst-mode', isGSTMode);
 
-    // Show/hide GST inclusive button
     const gstInclusiveBtn = document.getElementById('gstInclusiveBtn');
     if (gstInclusiveBtn) {
         gstInclusiveBtn.style.display = isGSTMode ? 'inline-block' : 'none';
     }
 
-
-    // Show/hide GST-specific UI elements
     const gstModeBtn = document.querySelector('.gst-mode-btn');
     const companyInfoBtn = document.querySelector('.company-info-btn');
     const customerDetailsBtn = document.querySelector('.customer-details-btn');
     const gstCustomersBtn = document.querySelector('.gst-customers-btn');
     const gstBillsBtn = document.querySelector('.gst-bills-btn');
-    const taxAdjustmentBtn = document.querySelector('.tax-adjustment-btn'); // NEW
+    const taxAdjustmentBtn = document.querySelector('.tax-adjustment-btn');
 
-    // GST MODE button should ALWAYS be visible (it's the toggle)
+    // NEW: Toggle Footer Button logic
+    const regFooterBtn = document.getElementById('reg-footer-btn');
+
     if (gstModeBtn) {
         gstModeBtn.style.display = 'flex';
-        // Update the button text based on current mode
         const icon = gstModeBtn.querySelector('.material-icons');
         const text = gstModeBtn.querySelector('span:not(.material-icons)') || document.createElement('span');
         if (isGSTMode) {
             icon.textContent = 'receipt';
-            if (!text.textContent) {
-                text.textContent = 'REGULAR MODE';
-                gstModeBtn.appendChild(text);
-            } else {
-                text.textContent = 'REGULAR MODE';
-            }
+            text.textContent = 'REGULAR MODE';
         } else {
             icon.textContent = 'receipt_long';
-            if (!text.textContent) {
-                text.textContent = 'GST MODE';
-                gstModeBtn.appendChild(text);
-            } else {
-                text.textContent = 'GST MODE';
-            }
+            text.textContent = 'GST MODE';
         }
+        if (!gstModeBtn.contains(text)) gstModeBtn.appendChild(text);
     }
 
-    // These should only be visible in GST mode
-    if (companyInfoBtn) {
-        companyInfoBtn.style.display = isGSTMode ? 'flex' : 'none';
-    }
-    if (customerDetailsBtn) {
-        customerDetailsBtn.style.display = isGSTMode ? 'flex' : 'none';
-    }
-    if (gstCustomersBtn) {
-        gstCustomersBtn.style.display = isGSTMode ? 'flex' : 'none';
-    }
-    if (gstBillsBtn) {
-        gstBillsBtn.style.display = isGSTMode ? 'flex' : 'none';
-    }
-    if (taxAdjustmentBtn) {
-        taxAdjustmentBtn.style.display = isGSTMode ? 'flex' : 'none'; // NEW
-    }
+    // UPDATED: Company Info is now ALWAYS visible (removed from the conditional hiding)
+    if (companyInfoBtn) companyInfoBtn.style.display = 'flex';
 
-    // Hide GST button in tools when in GST mode
+    // GST-only buttons
+    if (customerDetailsBtn) customerDetailsBtn.style.display = isGSTMode ? 'flex' : 'none';
+    if (gstCustomersBtn) gstCustomersBtn.style.display = isGSTMode ? 'flex' : 'none';
+    if (gstBillsBtn) gstBillsBtn.style.display = isGSTMode ? 'flex' : 'none';
+    if (taxAdjustmentBtn) taxAdjustmentBtn.style.display = isGSTMode ? 'flex' : 'none';
+
     const gstToolBtn = document.getElementById('gst-tool-btn');
-    if (gstToolBtn) {
-        gstToolBtn.style.display = isGSTMode ? 'none' : 'inline-block';
+    if (gstToolBtn) gstToolBtn.style.display = isGSTMode ? 'none' : 'inline-block';
+
+    // Handle Regular Footer Button Visibility
+    if (regFooterBtn) {
+        // Only show in Regular Mode AND Bill View
+        regFooterBtn.style.display = (!isGSTMode && currentView === 'bill') ? 'inline-block' : 'none';
     }
-    // Hide rate toggle button in GST mode
-    // Handle rate column visibility when switching modes
+
     const rateToggleBtn = document.querySelector('#tools button:nth-child(6)');
     if (rateToggleBtn) {
-        // Hide/show the toggle button based on mode
         rateToggleBtn.style.display = isGSTMode ? 'none' : 'inline-block';
-
-        // If switching to GST mode, show rate column (GST bills need rates)
         if (isGSTMode) {
             hideTableColumn(document.getElementById("createListManual"), 4, "table-cell");
             hideTableColumn(document.getElementById("copyListManual"), 4, "table-cell");
             hideTableColumn(document.getElementById("gstCopyListManual"), 5, "table-cell");
-            rateColumnHidden = false; // Reset the state
+            rateColumnHidden = false;
         } else {
-            // If switching back to normal mode, restore the previous rate column state
             const displayStyle = rateColumnHidden ? "none" : "table-cell";
             hideTableColumn(document.getElementById("createListManual"), 4, displayStyle);
             hideTableColumn(document.getElementById("copyListManual"), 4, displayStyle);
         }
     }
 
-    // Switch between regular and GST bill containers based on current view
     const billContainer = document.getElementById('bill-container');
     const gstBillContainer = document.getElementById('gst-bill-container');
     const manualContainer = document.getElementById('manual-item-container');
 
     if (currentView === 'bill') {
         if (isGSTMode) {
-            // Show GST bill
             billContainer.style.display = 'none';
             gstBillContainer.style.display = 'block';
             manualContainer.style.display = 'none';
             updateGSTBillDisplay();
         } else {
-            // Show regular bill
             billContainer.style.display = 'block';
             gstBillContainer.style.display = 'none';
             manualContainer.style.display = 'none';
+            // Trigger footer update
+            updateRegularFooterInfo();
         }
     } else {
-        // Show input mode
         billContainer.style.display = 'none';
         gstBillContainer.style.display = 'none';
         manualContainer.style.display = 'block';
     }
 
-    // Show HSN input in manual item container
     const hsnInputContainer = document.getElementById('hsn-input-container');
-    if (hsnInputContainer) {
-        hsnInputContainer.style.display = isGSTMode ? 'flex' : 'none';
-    }
-    // Hide/show Add Terms button based on mode
-    const addTermsBtn = document.getElementById('addTermsListSectionBtn');
-    if (addTermsBtn) {
-        addTermsBtn.style.display = isGSTMode ? 'none' : 'flex';
-    }
+    if (hsnInputContainer) hsnInputContainer.style.display = isGSTMode ? 'flex' : 'none';
 
-    console.log('updateUIForGSTMode completed');
+    const addTermsBtn = document.getElementById('addTermsListSectionBtn');
+    if (addTermsBtn) addTermsBtn.style.display = isGSTMode ? 'none' : 'flex';
 }
+
+
 function openCompanyInfoModal() {
     toggleSettingsSidebar()
     document.getElementById('company-info-modal').style.display = 'block';
@@ -7479,6 +7666,8 @@ async function loadCompanyInfo() {
         const info = await getFromDB('companyInfo', 'companyInfo');
         if (info) {
             companyInfo = info;
+            
+            // 1. Populate Modal Inputs
             document.getElementById('company-name').value = info.name || '';
             document.getElementById('company-address').value = info.address || '';
             document.getElementById('company-gst').value = info.gstin || '';
@@ -7492,8 +7681,52 @@ async function loadCompanyInfo() {
             document.getElementById('bank-name').value = info.bankName || '';
             document.getElementById('account-holder').value = info.accountHolder || '';
 
-            // Update the GST bill company info and signatory
             updateGSTBillCompanyInfo();
+            updateRegularFooterInfo();
+
+            // 2. Update Regular Bill Header & Hide Empty Fields
+            const regName = document.getElementById('companyName');
+            const regAddr = document.getElementById('companyAddr');
+            const regGstin = document.getElementById('companyGstin');
+            const regPhone = document.getElementById('companyPhone');
+            const regEmail = document.getElementById('companyEmail');
+
+            const regGstinLine = document.getElementById('reg-header-gstin-line');
+            const regPhoneLine = document.getElementById('reg-header-phone-line');
+            const regEmailLine = document.getElementById('reg-header-email-line');
+
+            // Name
+            if (regName) regName.textContent = info.name || 'COMPANY NAME';
+            
+            // Address - Hide if empty
+            if (regAddr) {
+                regAddr.textContent = info.address || '';
+                regAddr.style.display = (info.address && info.address.trim().length > 0) ? 'block' : 'none';
+            }
+            
+            // GSTIN - Set text (Visibility handled by updateGSTINVisibility below)
+            if (regGstin) regGstin.textContent = info.gstin || '';
+
+            // Contact No - Hide if empty
+            if (regPhone && regPhoneLine) {
+                regPhone.textContent = info.mobile || '';
+                const hasPhone = info.mobile && info.mobile.trim().length > 0;
+                regPhoneLine.style.display = hasPhone ? 'block' : 'none';
+            }
+
+            // Email - Hide if empty
+            if (regEmail && regEmailLine) {
+                regEmail.textContent = info.email || '';
+                const hasEmail = info.email && info.email.trim().length > 0;
+                regEmailLine.style.display = hasEmail ? 'block' : 'none';
+            }
+            
+            if (typeof updateBrandingUI === 'function') {
+                updateBrandingUI();
+            }
+
+            // Force check visibility based on current Tax Settings AND content length
+            updateGSTINVisibility();
         }
     } catch (error) {
         console.error('Error loading company info:', error);
@@ -7519,10 +7752,15 @@ async function saveCompanyInfo() {
     try {
         await setInDB('companyInfo', 'companyInfo', companyData);
         companyInfo = companyData;
-        updateGSTBillCompanyInfo();
+
+        // REFRESH UI IMMEDIATELY
+        await loadCompanyInfo(); 
+        
         closeCompanyInfoModal();
+        showNotification('Company info saved successfully!', 'success');
     } catch (error) {
         console.error('Error saving company info:', error);
+        showNotification('Error saving company info', 'error');
     }
 }
 
@@ -12630,11 +12868,12 @@ async function loadBillHeadings() {
 }
 
 // --- Branding (Logo, Sign, Stamp) Functions ---
-// --- Branding (Logo, Sign, Stamp) Functions ---
+
 
 let brandingSettings = {
     logo: null,
     logoPosition: 'left',
+    logoBorderRadius: 0, // <--- ADD THIS
     signature: null,
     stamp: null
 };
@@ -12643,7 +12882,10 @@ function openBrandingModal() {
     // Load current position
     document.getElementById('logo-position').value = brandingSettings.logoPosition || 'left';
 
-    // Clear file inputs (browser security doesn't allow retaining them)
+    // Load current border radius (NEW)
+    document.getElementById('logo-radius').value = brandingSettings.logoBorderRadius || 0;
+
+    // Clear file inputs
     document.getElementById('logo-upload').value = '';
     document.getElementById('sign-upload').value = '';
     document.getElementById('stamp-upload').value = '';
@@ -12696,13 +12938,12 @@ async function previewImage(input, type) {
 
 async function saveBrandingSettings() {
     const position = document.getElementById('logo-position').value;
+    const radius = document.getElementById('logo-radius').value; // (NEW)
 
     try {
-        // Update settings object with position
+        // Update settings object
         brandingSettings.logoPosition = position;
-
-        // Note: We don't need to read file inputs here because 
-        // previewImage() already updated the brandingSettings object
+        brandingSettings.logoBorderRadius = radius; // (NEW)
 
         // Save to DB
         await setInDB('settings', 'branding', brandingSettings);
@@ -12760,6 +13001,9 @@ function updateBrandingUI() {
             const img = document.createElement('img');
             img.src = brandingSettings.logo;
             img.className = 'bill-logo';
+
+            // APPLY BORDER RADIUS (NEW)
+            img.style.borderRadius = (brandingSettings.logoBorderRadius || 0) + '%';
 
             if (brandingSettings.logoPosition === 'left') {
                 container.insertBefore(img, container.firstChild);
