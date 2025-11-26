@@ -312,6 +312,13 @@
                         <input type="number" id="section-padding-bottom" placeholder="Bottom" min="0">
                     </div>
                 </div>
+
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-weight: 600;">
+                        <input type="checkbox" id="section-show-total" style="width: auto;">
+                        Show Section Total
+                    </label>
+                </div>
             </div>
 
             <!-- Update modal-footer to include reset button: -->
@@ -1067,6 +1074,7 @@
             <span class="material-icons">visibility</span>COLUMNS
         </button>
         <button onclick="openDiscountModal()"><span class="material-icons">percent</span>DISCOUNT</button>
+        <button onclick="openAdjustmentModal()"><span class="material-icons">tune</span>ADJUSTMENTS</button>
         <button onclick="openGSTModal()" id="gst-tool-btn"><span class="material-icons">request_quote</span>GST</button>
         <button onclick="openSectionModal()"><span class="material-icons">view_day</span>SECTION</button>
         <button onclick="toggleRegularFooter()" id="reg-footer-btn" style="display: none;"><span
@@ -1146,60 +1154,52 @@
                     </tbody>
                 </table>
                 <table id="bill-total-table">
-                    <tr>
-                        <td colspan="5" class="total-cell" style="text-align: right;width: 80%;">TOTAL</td>
-                        <td id="copyTotalAmount" class="total-cell" style="text-align: center;width: 20%;">0.00</td>
-                    </tr>
-                    <!-- Discount, GST and Grand Total Rows -->
-                    <tr id="discount-row" style="display: none;">
-                        <td colspan="5" style="text-align: right;">Discount (<span id="discount-percent">0</span>%)</td>
-                        <td id="discount-amount" style="text-align: center;">-0.00</td>
-                    </tr>
-                    <tr id="gst-row" style="display: none;">
-                        <td colspan="5" style="text-align: right;">GST (<span id="gst-percent">0</span>%)</td>
-                        <td id="gst-amount" style="text-align: center;">+0.00</td>
-                    </tr>
-                    <tr id="grand-total-row" style="display: none;">
-                        <td colspan="5" class="total-cell" style="text-align: right;">GRAND TOTAL</td>
-                        <td id="grand-total-amount" class="total-cell" style="text-align: center;">0.00</td>
-                    </tr>
+                    <tbody id="bill-total-tbody">
+                        <tr>
+                            <td colspan="5" class="total-cell" style="text-align: right; width: 80%;">TOTAL</td>
+                            <td id="createTotalAmountManual" class="total-cell" style="text-align: center; width: 20%;">
+                                0.00</td>
+                        </tr>
+                    </tbody>
                 </table>
                 <table class="bill-footer" id="regular-bill-footer" style="display: none; margin-top: 20px;">
-                <tbody>
-                    <tr>
-                        <td>
-                            <p><strong>Amount Chargeable (in words)</strong></p>
-                        </td>
-                        <td class="align-center" colspan="2">
-                            <p id="reg-bill-company-signatory">for COMPANY NAME</p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>
-                            <p id="reg-bill-amount-words">Rupees Zero Only</p>
-                        </td>
-                        <td rowspan="2" style="width: 15%; vertical-align: middle;text-align: center;" id="reg-stamp-cell"></td>
-                        <td rowspan="2" style="width: 15%; vertical-align: middle;text-align: center;" id="reg-signature-cell"></td>
-                    </tr>
-                    <tr>
-                        <td class="bank-info">
-                            <p><strong>A/C Holder Name :</strong> <span id="reg-bill-account-holder">-</span></p>
-                            <p><strong>A/C No :</strong> <span id="reg-bill-account-number">-</span></p>
-                            <span><strong>IFSC :</strong> <span id="reg-bill-ifsc-code">-</span></span>
-                            <span><strong>Branch :</strong> <span id="reg-bill-branch">-</span></span>
-                            <p><strong>Bank Name :</strong> <span id="reg-bill-bank-name">-</span></p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>
-                            <b>Declaration : </b>
-                            <p><small>We declare that this invoice shows the actual price of the </small></p>
-                            <p><small>goods described and that all particulars are true and correct</small></p>
-                        </td>
-                        <td style="text-align:center; vertical-align: middle;" colspan="2">Authorised Signatory</td>
-                    </tr>
-                </tbody>
-            </table>
+                    <tbody>
+                        <tr>
+                            <td>
+                                <p><strong>Amount Chargeable (in words)</strong></p>
+                            </td>
+                            <td class="align-center" colspan="2">
+                                <p id="reg-bill-company-signatory">for COMPANY NAME</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <p id="reg-bill-amount-words">Rupees Zero Only</p>
+                            </td>
+                            <td rowspan="2" style="width: 15%; vertical-align: middle;text-align: center;"
+                                id="reg-stamp-cell"></td>
+                            <td rowspan="2" style="width: 15%; vertical-align: middle;text-align: center;"
+                                id="reg-signature-cell"></td>
+                        </tr>
+                        <tr>
+                            <td class="bank-info">
+                                <p><strong>A/C Holder Name :</strong> <span id="reg-bill-account-holder">-</span></p>
+                                <p><strong>A/C No :</strong> <span id="reg-bill-account-number">-</span></p>
+                                <span><strong>IFSC :</strong> <span id="reg-bill-ifsc-code">-</span></span>
+                                <span><strong>Branch :</strong> <span id="reg-bill-branch">-</span></span>
+                                <p><strong>Bank Name :</strong> <span id="reg-bill-bank-name">-</span></p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <b>Declaration : </b>
+                                <p><small>We declare that this invoice shows the actual price of the </small></p>
+                                <p><small>goods described and that all particulars are true and correct</small></p>
+                            </td>
+                            <td style="text-align:center; vertical-align: middle;" colspan="2">Authorised Signatory</td>
+                        </tr>
+                    </tbody>
+                </table>
             </div>
         </div>
 
@@ -1744,6 +1744,82 @@
             <div class="modal-footer">
                 <button onclick="closeBrandingModal()" class="btn-cancel">Cancel</button>
                 <button onclick="saveBrandingSettings()" class="btn-apply">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="adjustment-modal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">
+                <h3>Adjustment Chain (Sequential)</h3>
+                <span class="close" onclick="closeAdjustmentModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="adjustment-form-wrapper" style="background: #f8f9fa; padding: 15px; border-radius: 4px;">
+                    <input type="hidden" id="adj-id">
+                    <div class="form-group" style="margin-bottom: 10px;">
+                        <label>Description:</label>
+                        <input type="text" id="adj-name" placeholder="e.g. Discount, GST, Packing" style="width: 100%;">
+                    </div>
+
+                    <div class="form-row" style="display: flex; gap: 15px; margin-bottom: 10px;">
+                        <div class="form-group" style="flex: 1;">
+                            <label>Type:</label>
+                            <select id="adj-type" style="width: 100%;">
+                                <option value="amount">₹ Fixed Amount</option>
+                                <option value="percent">% Percent</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label>Value:</label>
+                            <input type="number" id="adj-value" placeholder="0" step="0.01" style="width: 100%;">
+                        </div>
+                    </div>
+
+                    <div class="form-row" style="display: flex; gap: 15px; align-items: flex-end;">
+                        <div class="form-group" style="flex: 2;">
+                            <label>Operation:</label>
+                            <select id="adj-operation" style="width: 100%;">
+                                <option value="add">(+) Add</option>
+                                <option value="subtract">(-) Subtract</option>
+
+                            </select>
+                        </div>
+                        <div class="form-group" style="width: 60px;">
+                            <label>Color:</label>
+                            <input type="color" id="adj-color" value="#000000"
+                                style="padding:0; height:38px; width: 100%; cursor: pointer;">
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <button onclick="saveAdjustment()" class="btn-apply" id="btn-save-adj"
+                                style="width: 100%;">Add</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 20px;">
+                    <table class="unified-ledger-table" id="adj-preview-table">
+                        <thead>
+                            <tr>
+                                <th>Description</th>
+                                <th>Source Amt</th>
+                                <th>Adj Value</th>
+                                <th>Adj Amount</th>
+                                <th>Running Balance</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adj-preview-tbody">
+                        </tbody>
+                    </table>
+                    <p style="font-size: 0.8em; color: #666; margin-top: 5px;">
+                        <i class="material-icons" style="font-size: 12px;">info</i>
+                        Drag rows to reorder. Calculation is sequential (Top to Bottom).
+                    </p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeAdjustmentModal()" class="btn-apply">Done</button>
             </div>
         </div>
     </div>
