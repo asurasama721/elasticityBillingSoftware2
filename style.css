@@ -1594,8 +1594,8 @@ input:checked+.toggle-slider:before {
 /* In style.css, add these styles */
 .section-total-row td {
     background-color: #f8f8f8; /* Very light variant of the section color */
-    border-top: 1px dashed #aaa !important;
-    border-bottom: 2px solid #ddd !important;
+    /* border-top: 1px dashed #aaa !important;
+    border-bottom: 2px solid #ddd !important; */
     color: #333;
 }
 
@@ -3160,3 +3160,45 @@ terms modal
     height: 38px; /* Consistent height for alignment */
 }
 
+/* [ADD TO END OF style.css] */
+
+/* Force hide Actions column in Regular Bill View Table */
+#copyListManual .actions-cell {
+    display: none !important;
+}
+
+
+
+/* [ADD TO END OF style.css] */
+
+/* Responsive Zoom Levels */
+
+/* Tablet / Small Laptop */
+@media (max-width: 1024px) {
+    #main-container {
+        zoom: 0.9; /* 90% scale */
+    }
+}
+
+/* Large Mobile / Small Tablet */
+@media (max-width: 768px) {
+    #main-container {
+        zoom: 0.75; /* 75% scale */
+        flex-direction: column; /* Ensure items stack vertically */
+    }
+    
+    /* Ensure full width when stacked */
+    #bill-container, 
+    #gst-bill-container, 
+    #manual-item-container {
+        max-width: 100% !important; 
+        min-width: 100% !important;
+    }
+}
+
+/* Small Mobile */
+@media (max-width: 350px) {
+    #main-container {
+        zoom: 0.6; /* 60% scale */
+    }
+}
