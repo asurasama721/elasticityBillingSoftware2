@@ -35,6 +35,10 @@ let currentEditingBillType = null; // 'regular' or 'gst
 // 
 let currentConvertUnit = 'none';
 
+// [ADD AT TOP WITH GLOBAL VARIABLES]
+let adjustmentChain = []; // Stores: { id, name, type, value, operation, textColor }
+let adjDragSrcEl = null;  // Unique drag source for adjustments
+
 // Add this with other global variables
 let sectionModalState = {
     align: 'left',
@@ -873,9 +877,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         await loadTaxSettings();
         // await loadSavedItems();
         await loadSavedCustomers();
-        // ADD THIS LINE:
         await loadBillHeadings();
-        // ADD THIS LINE:
         await loadBrandingSettings();
 
         // Load GST mode settings
@@ -885,12 +887,19 @@ document.addEventListener('DOMContentLoaded', async function () {
         await loadGSTCustomers();
 
         updateUIForGSTMode();
+
+        // === FIX: Force Adjustment Calculation on Load ===
+        // This ensures the total table renders correctly after refresh
+        setTimeout(() => {
+            updateTotal(); // Triggers calculateAdjustments using the loaded adjustmentChain
+        }, 100);
+
         saveStateToHistory();
 
-        // ADD THIS: Fix profit state after page refresh
+        // Fix profit state after page refresh
         restoreProfitStateAfterRefresh();
 
-        // FIXED: Safe date initialization
+        // Safe date initialization
         const dateInput = document.getElementById('billDate');
         if (dateInput && !dateInput.value) {
             const today = new Date();
@@ -905,7 +914,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         // Initialize payment and ledger systems
         setupPaymentDialog();
 
-        // FIXED: Safe ledger period initialization
+        // Safe ledger period initialization
         const fromDateInput = document.getElementById('from-date-input');
         if (fromDateInput) {
             // Set default from date to 3 months ago for "From Date" option
@@ -914,7 +923,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             fromDateInput.value = threeMonthsAgo.toISOString().split('T')[0];
         }
 
-        // FIXED: Safe select all dates event listener
+        // Safe select all dates event listener
         const selectAllDates = document.getElementById('select-all-dates');
         if (selectAllDates) {
             selectAllDates.addEventListener('change', handleSelectAllChange);
@@ -975,7 +984,6 @@ document.addEventListener('DOMContentLoaded', async function () {
         });
 
         // UPDATED DIMENSION INPUT EVENT LISTENERS
-        // Real-time calculation without formatting during typing
         const dimension1 = document.getElementById('dimension1');
         if (dimension1) {
             dimension1.addEventListener('input', function () {
@@ -1027,11 +1035,10 @@ document.addEventListener('DOMContentLoaded', async function () {
             custName.addEventListener('input', async function () {
                 const customerName = this.value.trim();
                 if (customerName) {
-                    // Store current customer name for rate suggestions
                     window.currentCustomer = customerName;
-
-                    // Check if we should auto-fill rates for existing items
-                    await checkAndApplyCustomerRates(customerName);
+                    if (autoApplyCustomerRates) {
+                        await checkAndApplyCustomerRates(customerName);
+                    }
                 }
             });
         }
@@ -1041,10 +1048,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             custName.addEventListener('input', async function () {
                 const customerName = this.value.trim();
                 if (customerName) {
-                    // Store current customer name for rate suggestions
                     window.currentCustomer = customerName;
-
-                    // FIX: Only auto-fill rates if auto-apply is ON
                     if (autoApplyCustomerRates) {
                         await checkAndApplyCustomerRates(customerName);
                     }
@@ -1076,22 +1080,25 @@ document.addEventListener('DOMContentLoaded', async function () {
             }
 
             // auto select cgst or igst
-            document.getElementById('consignee-gst').addEventListener('input', function () {
-                const consigneeGST = this.value.trim();
-                const companyGST = document.getElementById('company-gst').value.trim();
+            const consigneeGST = document.getElementById('consignee-gst');
+            if (consigneeGST) {
+                consigneeGST.addEventListener('input', function () {
+                    const cGSTVal = this.value.trim();
+                    const companyGST = document.getElementById('company-gst').value.trim();
 
-                if (consigneeGST.length >= 2 && companyGST.length >= 2) {
-                    const consigneeStateCode = consigneeGST.substring(0, 2);
-                    const companyStateCode = companyGST.substring(0, 2);
+                    if (cGSTVal.length >= 2 && companyGST.length >= 2) {
+                        const consigneeStateCode = cGSTVal.substring(0, 2);
+                        const companyStateCode = companyGST.substring(0, 2);
 
-                    const transactionTypeSelect = document.getElementById('transaction_type');
-                    if (consigneeStateCode !== companyStateCode) {
-                        transactionTypeSelect.value = 'interstate';
-                    } else {
-                        transactionTypeSelect.value = 'intrastate';
+                        const transactionTypeSelect = document.getElementById('transaction_type');
+                        if (consigneeStateCode !== companyStateCode) {
+                            transactionTypeSelect.value = 'interstate';
+                        } else {
+                            transactionTypeSelect.value = 'intrastate';
+                        }
                     }
-                }
-            });
+                });
+            }
 
             // Handle payment buttons
             if (e.target.classList.contains('btn-payment') || e.target.closest('.btn-payment')) {
@@ -1104,14 +1111,14 @@ document.addEventListener('DOMContentLoaded', async function () {
                 }
             }
         });
+
         // Add this to hide ALL suggestion boxes when clicking elsewhere
         document.addEventListener('click', function (e) {
-            // Array of input IDs and their corresponding suggestion box IDs
             const suggestionPairs = [
-                { inputId: 'itemNameManual', boxId: 'item-suggestions' },       // Item Search
-                { inputId: 'consignee-name', boxId: 'consignee-suggestions' }, // Bill To Search
-                { inputId: 'buyer-name', boxId: 'buyer-suggestions' },          // Ship To Search
-                { inputId: 'custName', boxId: 'regular-customer-suggestions' }  // Regular Customer Search (NEW)
+                { inputId: 'itemNameManual', boxId: 'item-suggestions' },
+                { inputId: 'consignee-name', boxId: 'consignee-suggestions' },
+                { inputId: 'buyer-name', boxId: 'buyer-suggestions' },
+                { inputId: 'custName', boxId: 'regular-customer-suggestions' }
             ];
 
             suggestionPairs.forEach(pair => {
@@ -1119,7 +1126,6 @@ document.addEventListener('DOMContentLoaded', async function () {
                 const box = document.getElementById(pair.boxId);
 
                 if (input && box) {
-                    // If click is NOT on the input AND NOT inside the suggestion box
                     if (e.target !== input && !box.contains(e.target)) {
                         box.style.display = 'none';
                     }
@@ -1138,6 +1144,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         if (itemNameManual) {
             itemNameManual.addEventListener('input', handleItemNameInput);
         }
+
         // Load custom payment methods on startup
         await loadCustomPaymentMethods();
 
@@ -1151,6 +1158,8 @@ document.addEventListener('DOMContentLoaded', async function () {
         console.error('Error during initialization:', error);
     }
 });
+
+
 function initializeDateInputs() {
     const today = new Date();
     const day = String(today.getDate()).padStart(2, '0');
@@ -4338,99 +4347,17 @@ function updateRegularFooterInfo() {
 }
 
 function updateTotal() {
-    const vars = getModeSpecificVars();
-    const createListId = vars.createListId;
-    const totalAmountId = vars.totalAmountId;
-    const copyTotalAmountId = vars.copyTotalAmountId;
-
-    const total = Array.from(document.querySelectorAll(`#${createListId} tbody tr[data-id]`))
+    // 1. Calculate Item Subtotal
+    const createListId = getModeSpecificVars().createListId;
+    const subtotal = Array.from(document.querySelectorAll(`#${createListId} tbody tr[data-id]`))
         .reduce((sum, row) => {
             const amountCell = row.querySelector('.amount');
-            if (amountCell) {
-                const amountText = amountCell.textContent.trim();
-                const amountValue = parseFloat(amountText);
-                return sum + (isNaN(amountValue) ? 0 : amountValue);
-            }
-            return sum;
+            return sum + (amountCell ? (parseFloat(amountCell.textContent) || 0) : 0);
         }, 0);
 
-    document.getElementById(totalAmountId).textContent = roundToTwoDecimals(total).toFixed(2);
-
-    const copyTotalElement = document.getElementById(copyTotalAmountId);
-    if (copyTotalElement) {
-        copyTotalElement.textContent = roundToTwoDecimals(total).toFixed(2);
-    }
-
-    const discountRow = document.getElementById('discount-row');
-    const discountPercentSpan = document.getElementById('discount-percent');
-    const discountAmountTd = document.getElementById('discount-amount');
-
-    let discountAmountValue = 0;
-    if (discountPercent > 0) {
-        discountAmountValue = storeWithPrecision(total * (discountPercent / 100));
-    } else if (discountAmount > 0) {
-        discountAmountValue = discountAmount;
-    }
-
-    const displayDiscountAmount = roundToTwoDecimals(discountAmountValue);
-
-    if ((discountPercent > 0 || discountAmount > 0) && discountAmountValue > 0) {
-        if (discountRow) discountRow.style.display = '';
-        if (discountPercentSpan) discountPercentSpan.textContent = roundToTwoDecimals(discountPercent);
-        if (discountAmountTd) discountAmountTd.textContent = `-${displayDiscountAmount}`;
-        if (discountRow && discountRow.cells[0]) {
-            discountRow.cells[0].textContent = `Discount (${roundToTwoDecimals(discountPercent)}%)`;
-        }
-    } else {
-        if (discountRow) discountRow.style.display = 'none';
-    }
-
-    // Regular Bill Logic
-    const billContainer = document.getElementById('bill-container');
-    if (billContainer && billContainer.style.display !== 'none') {
-        const gstRow = document.getElementById('gst-row');
-        const gstPercentSpan = document.getElementById('gst-percent');
-        const gstAmountTd = document.getElementById('gst-amount');
-        const grandTotalRow = document.getElementById('grand-total-row');
-        const grandTotalAmount = document.getElementById('grand-total-amount');
-
-        let finalTotalForWords = total;
-
-        if (gstPercent > 0) {
-            if (gstRow) gstRow.style.display = '';
-            if (gstPercentSpan) gstPercentSpan.textContent = gstPercent;
-
-            const amountAfterDiscount = total - discountAmountValue;
-            const gstAmount = amountAfterDiscount * (gstPercent / 100);
-
-            if (gstAmountTd) gstAmountTd.textContent = `+${roundToTwoDecimals(gstAmount)}`;
-            if (grandTotalRow) grandTotalRow.style.display = '';
-
-            const grandTotal = roundToTwoDecimals(amountAfterDiscount + gstAmount);
-            if (grandTotalAmount) grandTotalAmount.textContent = grandTotal;
-            finalTotalForWords = grandTotal;
-        } else {
-            if (gstRow) gstRow.style.display = 'none';
-            if (grandTotalRow) grandTotalRow.style.display = 'none';
-        }
-
-        // If Discount exists but no GST, final total is subtotal - discount
-        if ((discountPercent > 0 || discountAmount > 0) && gstPercent === 0) {
-            if (grandTotalRow) grandTotalRow.style.display = '';
-            const amountAfterDiscount = total - discountAmountValue;
-            const grandTotal = roundToTwoDecimals(amountAfterDiscount);
-            if (grandTotalAmount) grandTotalAmount.textContent = grandTotal;
-            finalTotalForWords = grandTotal;
-        }
-
-        // Update Amount in Words for Regular Bill
-        const wordsElement = document.getElementById('reg-bill-amount-words');
-        if (wordsElement) {
-            // Round to whole number for words
-            const words = convertNumberToWords(Math.round(finalTotalForWords));
-            wordsElement.textContent = `Rupees ${words} Only`;
-        }
-    }
+    // 2. Run Sequential Adjustment Calculation
+    calculateAdjustments(subtotal);
+    updateSectionTotals();
 }
 
 
@@ -4737,6 +4664,7 @@ async function loadGSTCustomerDataFromLocalStorage() {
         console.error('Error loading GST customer data:', error);
     }
 }
+
 async function loadFromLocalStorage() {
     try {
         const saved = await getFromDB('billDataManual', 'currentBill');
@@ -4755,25 +4683,59 @@ async function loadFromLocalStorage() {
             document.getElementById("custPhone").value = saved.customer?.phone || "";
             document.getElementById("custGSTIN").value = saved.customer?.gstin || "";
 
-            // Load tax settings
-            if (saved.taxSettings) {
-                discountPercent = saved.taxSettings.discountPercent || 0;
-                discountAmount = saved.taxSettings.discountAmount || 0;
-                gstPercent = saved.taxSettings.gstPercent || 0;
+            // === NEW: Load Adjustments (with Migration) ===
+            if (saved.adjustmentChain) {
+                // Load new format directly
+                adjustmentChain = saved.adjustmentChain;
+            } else if (saved.taxSettings) {
+                // MIGRATION: Convert legacy Tax/Discount to Adjustment Chain
+                adjustmentChain = []; // Reset
+
+                // Migrate Discount (Subtract) - Put at start
+                if (saved.taxSettings.discountPercent > 0) {
+                    adjustmentChain.push({
+                        id: 'legacy-discount',
+                        name: 'Discount',
+                        type: 'percent',
+                        value: saved.taxSettings.discountPercent,
+                        operation: 'subtract',
+                        textColor: '#e74c3c'
+                    });
+                } else if (saved.taxSettings.discountAmount > 0) {
+                    adjustmentChain.push({
+                        id: 'legacy-discount',
+                        name: 'Discount',
+                        type: 'amount',
+                        value: saved.taxSettings.discountAmount,
+                        operation: 'subtract',
+                        textColor: '#e74c3c'
+                    });
+                }
+
+                // Migrate GST (Add) - Put at end
+                if (saved.taxSettings.gstPercent > 0) {
+                    adjustmentChain.push({
+                        id: 'legacy-gst',
+                        name: 'GST',
+                        type: 'percent',
+                        value: saved.taxSettings.gstPercent,
+                        operation: 'add',
+                        textColor: '#27ae60'
+                    });
+                }
+                console.log('Migrated legacy tax settings to adjustment chain');
+            } else {
+                adjustmentChain = [];
             }
 
-            // ADD THIS: Save tax settings to persist dialog states
-            await saveTaxSettings();
-
+            // Load GST Data
             await loadCompanyInfo();
             await loadGSTCustomerDataFromLocalStorage();
 
-            // NEW: Update bill view display with saved GST customer data
             if (saved.gstCustomerData) {
+                // ... [Existing GST Customer Load Logic] ...
                 document.getElementById('bill-invoice-no').textContent = saved.gstCustomerData.invoiceNo || '';
                 document.getElementById('bill-date-gst').textContent = saved.gstCustomerData.invoiceDate || '';
-
-                // Update Bill To section
                 document.getElementById('billToName').textContent = saved.gstCustomerData.billTo?.name || '';
                 document.getElementById('billToAddr').textContent = saved.gstCustomerData.billTo?.address || '';
                 document.getElementById('billToGstin').textContent = saved.gstCustomerData.billTo?.gstin || 'customer 15-digit GSTIN';
@@ -4781,7 +4743,6 @@ async function loadFromLocalStorage() {
                 document.getElementById('billToState').textContent = saved.gstCustomerData.billTo?.state || 'Maharashtra';
                 document.getElementById('billToStateCode').textContent = saved.gstCustomerData.billTo?.stateCode || '27';
 
-                // Update Ship To section
                 if (saved.gstCustomerData.customerType === 'both' && saved.gstCustomerData.shipTo?.name) {
                     document.getElementById('shipTo').style.display = 'block';
                     document.getElementById('shipToName').textContent = saved.gstCustomerData.shipTo.name;
@@ -4796,7 +4757,7 @@ async function loadFromLocalStorage() {
                 }
             }
 
-            // Clear all tables
+            // Clear and Rebuild Tables
             const createListTbody = document.querySelector("#createListManual tbody");
             const copyListTbody = document.querySelector("#copyListManual tbody");
             const gstListTbody = document.querySelector("#gstCopyListManual tbody");
@@ -4807,125 +4768,28 @@ async function loadFromLocalStorage() {
 
             let maxId = 0;
 
-            // NEW: Load table structure in exact saved order using tableStructure
+            // Load Items/Sections
             if (saved.tableStructure && saved.tableStructure.length > 0) {
                 saved.tableStructure.forEach(rowData => {
                     if (rowData.type === 'section') {
                         createSectionInAllTablesFromSaved(rowData);
                     } else if (rowData.type === 'item') {
-                        // Create item in all tables
                         createItemInAllTablesFromSaved(rowData);
-
                         const idNum = parseInt(rowData.id.split('-')[2]);
                         if (idNum > maxId) maxId = idNum;
                     }
                 });
                 rowCounterManual = maxId + 1;
-
-                // ADD THIS: Restore dimension visibility state after all items are created
-                saved.tableStructure.forEach(rowData => {
-                    if (rowData.type === 'item' && rowData.dimensionsVisible !== undefined) {
-                        const row = document.querySelector(`#createListManual tr[data-id="${rowData.id}"]`);
-                        if (row) {
-                            row.setAttribute('data-dimensions-visible', rowData.dimensionsVisible ? 'true' : 'false');
-                            // Also update the toggle button icon
-                            const dimensionsBtn = row.querySelector('.dimensions-btn .material-icons');
-                            if (dimensionsBtn) {
-                                dimensionsBtn.textContent = rowData.dimensionsVisible ? 'layers' : 'layers_clear';
-                            }
-                        }
-                    }
-                });
-            }
-            // BACKWARD COMPATIBILITY: Handle old structure if tableStructure doesn't exist
-            else if (saved.items || saved.sections) {
-                // Load sections first (old way)
-                if (saved.sections && saved.sections.length > 0) {
-                    saved.sections.forEach(sectionData => {
-                        createSectionInAllTablesFromSaved(sectionData);
-                    });
-                }
-
-                // Then load items (old way)
-                if (saved.items && saved.items.length > 0) {
-                    saved.items.forEach(item => {
-                        // FIX: Safe handling for dimension toggles
-                        const toggleStates = item.dimensionToggles || { toggle1: true, toggle2: true, toggle3: true };
-
-                        createItemInAllTablesFromSaved({
-                            type: 'item',
-                            id: item.id,
-                            itemName: item.itemName,
-                            quantity: item.quantity,
-                            unit: item.unit,
-                            rate: item.rate,
-                            amount: item.amount,
-                            notes: item.notes,
-                            dimensionType: item.dimensionType,
-                            dimensionValues: item.dimensionValues,
-                            dimensionUnit: item.dimensionUnit,
-                            dimensionToggles: toggleStates,
-                            hsnCode: item.hsnCode,
-                            productCode: item.productCode,
-                            discountType: item.discountType,
-                            discountValue: item.discountValue,
-                            particularsHtml: item.particularsHtml,
-                            displayQuantity: item.displayQuantity
-                        });
-
-                        const idNum = parseInt(item.id.split('-')[2]);
-                        if (idNum > maxId) maxId = idNum;
-                    });
-                    rowCounterManual = maxId + 1;
-                }
             }
 
-            // ADD THIS: Add drag listeners to all existing sections after loading
-            initializeDragAndDrop();
-            // Apply collapse states
-            if (saved.tableStructure) {
-                saved.tableStructure.forEach(rowData => {
-                    if (rowData.type === 'section' && rowData.collapsed) {
-                        const sectionRow = document.querySelector(`tr[data-section-id="${rowData.id}"]`);
-                        if (sectionRow) {
-                            const button = sectionRow.querySelector('.collapse-btn');
-                            if (button) {
-                                button.textContent = '+';
-                                let nextRow = sectionRow.nextElementSibling;
-                                while (nextRow && !nextRow.classList.contains('section-row')) {
-                                    nextRow.style.display = 'none';
-                                    nextRow = nextRow.nextElementSibling;
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-            // Backward compatibility for old structure
-            else if (saved.sections) {
-                saved.sections.forEach(sectionData => {
-                    if (sectionData.collapsed) {
-                        const sectionRow = document.querySelector(`tr[data-section-id="${sectionData.id}"]`);
-                        if (sectionRow) {
-                            const button = sectionRow.querySelector('.collapse-btn');
-                            if (button) {
-                                button.textContent = '+';
-                                let nextRow = sectionRow.nextElementSibling;
-                                while (nextRow && !nextRow.classList.contains('section-row')) {
-                                    nextRow.style.display = 'none';
-                                    nextRow = nextRow.nextElementSibling;
-                                }
-                            }
-                        }
-                    }
-                });
-            }
+            // Load Terms
             if (saved.termsData && saved.termsData.length > 0) {
                 loadTermsData(saved.termsData);
             }
 
+            // Final Updates
             updateSerialNumbers();
-            updateTotal();
+            updateTotal(); // Calculates using the new adjustmentChain
             updateGSTINVisibility();
 
             if (isGSTMode) {
@@ -4993,6 +4857,7 @@ async function saveToLocalStorage() {
         const vars = getModeSpecificVars();
         const createListId = vars.createListId;
 
+        // 1. Gather all basic data
         const data = {
             tableStructure: [],
             company: {
@@ -5009,21 +4874,28 @@ async function saveToLocalStorage() {
                 phone: document.getElementById("custPhone").value,
                 gstin: document.getElementById("custGSTIN").value
             },
+            // Keep legacy taxSettings object for safety, but main logic uses adjustmentChain
             taxSettings: {
-                discountPercent: discountPercent,
-                discountAmount: discountAmount,
-                gstPercent: gstPercent
+                discountPercent: 0, // Deprecated but kept for structure
+                discountAmount: 0,
+                gstPercent: 0
             },
+            // NEW: Save the adjustment chain
+            adjustmentChain: adjustmentChain,
+
+            // State flags
             normalBillState: {
-                discountVisible: discountPercent > 0 && discountAmount > 0,
-                gstVisible: gstPercent > 0
+                discountVisible: adjustmentChain.length > 0,
+                gstVisible: adjustmentChain.length > 0
             },
             termsData: getTermsData(),
             gstCustomerData: await getGSTCustomerDataForSave()
         };
 
+        // 2. Gather Rows (Items and Sections)
         document.querySelectorAll(`#${createListId} tbody tr`).forEach(row => {
             if (row.classList.contains('section-row')) {
+                // ... [Existing Section Logic] ...
                 const sectionId = row.getAttribute('data-section-id');
                 const cell = row.querySelector('td');
                 const collapseBtn = row.querySelector('.collapse-btn');
@@ -5036,13 +4908,9 @@ async function saveToLocalStorage() {
                     }
                 }
 
-                let htmlContent = '';
-                if (row.closest('#createListManual')) {
-                    htmlContent = cell.innerHTML;
-                } else {
-                    htmlContent = sectionName;
-                }
+                let htmlContent = row.closest('#createListManual') ? cell.innerHTML : sectionName;
 
+                // In saveToLocalStorage, inside the section row block:
                 data.tableStructure.push({
                     type: 'section',
                     id: sectionId,
@@ -5050,9 +4918,12 @@ async function saveToLocalStorage() {
                     style: cell.getAttribute('style') || '',
                     collapsed: collapseBtn ? collapseBtn.textContent === '+' : false,
                     html: htmlContent,
-                    sourceTable: row.closest('table')?.id || 'createListManual'
+                    sourceTable: row.closest('table')?.id || 'createListManual',
+                    showTotal: row.getAttribute('data-show-total') === 'true' // Save this
                 });
+
             } else if (row.getAttribute('data-id')) {
+                // ... [Existing Item Logic] ...
                 const cells = row.children;
                 const particularsDiv = cells[1];
                 const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
@@ -5066,13 +4937,10 @@ async function saveToLocalStorage() {
                 const toggleStates = toggleStatesAttr ? JSON.parse(toggleStatesAttr) : { toggle1: true, toggle2: true, toggle3: true };
 
                 const originalQuantity = parseFloat(row.getAttribute('data-original-quantity') || cells[2].textContent);
-
                 const hsnCode = row.getAttribute('data-hsn') || '';
                 const productCode = row.getAttribute('data-product-code') || '';
                 const discountType = row.getAttribute('data-discount-type') || 'none';
                 const discountValue = row.getAttribute('data-discount-value') || '';
-
-                // --- SAVE CONVERT UNIT ---
                 const convertUnit = row.getAttribute('data-convert-unit') || 'none';
 
                 data.tableStructure.push({
@@ -5088,7 +4956,7 @@ async function saveToLocalStorage() {
                     dimensionValues: dimensionValues,
                     dimensionUnit: dimensionUnit,
                     dimensionToggles: toggleStates,
-                    convertUnit: convertUnit, // <--- SAVED HERE
+                    convertUnit: convertUnit,
                     hsnCode: hsnCode,
                     productCode: productCode,
                     discountType: discountType,
@@ -5100,7 +4968,9 @@ async function saveToLocalStorage() {
             }
         });
 
+        // 3. Save to DB
         await setInDB('billDataManual', 'currentBill', data);
+
     } catch (error) {
         console.error('Error saving to localStorage:', error);
     }
@@ -5158,7 +5028,8 @@ function saveStateToHistory() {
                 name: sectionName,
                 style: cell.getAttribute('style') || '',
                 collapsed: collapseBtn ? collapseBtn.textContent === '+' : false,
-                html: completeHTML
+                html: completeHTML,
+                showTotal: row.getAttribute('data-show-total') === 'true' // <--- ADDED THIS FIX
             });
         } else if (row.getAttribute('data-id')) {
             const cells = row.children;
@@ -5385,6 +5256,55 @@ async function saveToHistory() {
         const billNo = document.getElementById("billNo").value.trim() || "No Bill Number";
         const date = document.getElementById("billDate").value.trim() || new Date().toLocaleDateString();
 
+        const createListId = vars.createListId;
+
+        // --- 1. Calculate Total Amount based on Adjustment Chain ---
+        let subtotal = 0;
+        document.querySelectorAll(`#${createListId} tbody tr[data-id]`).forEach(row => {
+            const amount = parseFloat(row.children[5].textContent) || 0;
+            subtotal += amount;
+        });
+
+        let runningBalance = subtotal;
+
+        // Filter chain based on mode (same logic as calculateAdjustments)
+        const activeChain = isGSTMode
+            ? adjustmentChain.filter(a => a.id !== 'legacy-gst')
+            : adjustmentChain;
+
+        // Apply Adjustments
+        if (activeChain && activeChain.length > 0) {
+            activeChain.forEach(adj => {
+                let adjAmount = 0;
+                if (adj.type === 'percent') {
+                    adjAmount = (runningBalance * adj.value) / 100;
+                } else {
+                    adjAmount = adj.value;
+                }
+
+                if (adj.operation === 'subtract') {
+                    runningBalance -= adjAmount;
+                } else {
+                    runningBalance += adjAmount;
+                }
+            });
+        }
+
+        // If GST Mode, add tax to final total for display
+        if (isGSTMode) {
+            const taxableValue = runningBalance;
+            let cgstAmount = 0, sgstAmount = 0, igstAmount = 0;
+
+            if (typeof transactionType !== 'undefined' && transactionType === 'intrastate') {
+                cgstAmount = (taxableValue * (currentGSTPercent / 2)) / 100;
+                sgstAmount = (taxableValue * (currentGSTPercent / 2)) / 100;
+            } else {
+                igstAmount = (taxableValue * currentGSTPercent) / 100;
+            }
+            runningBalance = Math.round(taxableValue + cgstAmount + sgstAmount + igstAmount);
+        }
+
+        // --- 2. Construct Data Object ---
         const currentData = {
             tableStructure: [],
             company: {
@@ -5400,19 +5320,19 @@ async function saveToHistory() {
                 phone: document.getElementById("custPhone").value,
                 gstin: document.getElementById("custGSTIN").value
             },
+            // === UPDATE: Save Adjustment Chain ===
+            adjustmentChain: adjustmentChain,
+            // Keep legacy settings zeroed out to maintain schema
             taxSettings: {
-                discountPercent: storeWithPrecision(discountPercent),
-                discountAmount: storeWithPrecision(discountAmount),
-                gstPercent: storeWithPrecision(gstPercent)
+                discountPercent: 0,
+                discountAmount: 0,
+                gstPercent: 0
             },
             timestamp: Date.now(),
-            totalAmount: "0.00"
+            totalAmount: runningBalance.toFixed(2) // Use calculated total
         };
 
-        const createListId = vars.createListId;
-        let totalAmount = 0;
-
-        // Save complete table structure in exact order
+        // Save complete table structure (Existing Logic)
         document.querySelectorAll(`#${createListId} tbody tr`).forEach(row => {
             if (row.classList.contains('section-row')) {
                 const sectionId = row.getAttribute('data-section-id');
@@ -5432,15 +5352,17 @@ async function saveToHistory() {
                     id: sectionId,
                     name: sectionName,
                     style: cell.getAttribute('style') || '',
-                    collapsed: collapseBtn ? collapseBtn.textContent === '+' : false
+                    collapsed: collapseBtn ? collapseBtn.textContent === '+' : false,
+                    html: cell.innerHTML, // Use innerHTML to preserve buttons for manual table
+                    showTotal: row.getAttribute('data-show-total') === 'true' // <--- ADDED THIS FIX
                 });
             } else if (row.getAttribute('data-id')) {
                 const cells = row.children;
                 const particularsDiv = cells[1];
                 const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
                 const notes = particularsDiv.querySelector('.notes')?.textContent || '';
-                const amount = parseFloat(cells[5].textContent) || 0;
-                totalAmount += amount;
+
+                // Note: We don't need to sum totalAmount here anymore as we calculated it above
 
                 const particularsHtml = particularsDiv.innerHTML;
                 const dimensionType = row.getAttribute('data-dimension-type') || 'none';
@@ -5448,7 +5370,6 @@ async function saveToHistory() {
                 const dimensionValues = dimensionValuesAttr ? JSON.parse(dimensionValuesAttr) : [0, 0, 0];
                 const dimensionUnit = row.getAttribute('data-dimension-unit') || 'ft';
 
-                // Safe JSON parsing for dimension toggles
                 const toggleStatesAttr = row.getAttribute('data-dimension-toggles');
                 let toggleStates;
                 try {
@@ -5462,8 +5383,6 @@ async function saveToHistory() {
                 const productCode = row.getAttribute('data-product-code') || '';
                 const discountType = row.getAttribute('data-discount-type') || 'none';
                 const discountValue = row.getAttribute('data-discount-value') || '';
-
-                // --- SAVE CONVERT UNIT ---
                 const convertUnit = row.getAttribute('data-convert-unit') || 'none';
 
                 currentData.tableStructure.push({
@@ -5479,7 +5398,7 @@ async function saveToHistory() {
                     dimensionValues: dimensionValues,
                     dimensionUnit: dimensionUnit,
                     dimensionToggles: toggleStates,
-                    convertUnit: convertUnit, // <--- CRITICAL: Save this attribute
+                    convertUnit: convertUnit,
                     hsnCode: hsnCode,
                     productCode: productCode,
                     discountType: discountType,
@@ -5491,9 +5410,7 @@ async function saveToHistory() {
             }
         });
 
-        currentData.totalAmount = totalAmount.toFixed(2);
-
-        if (totalAmount === 0 && currentData.tableStructure.length === 0) {
+        if (currentData.totalAmount === "0.00" && currentData.tableStructure.length === 0) {
             return;
         }
 
@@ -5501,10 +5418,11 @@ async function saveToHistory() {
 
         if (history.length > 0) {
             const lastItem = history[0];
-            // Simple check to avoid duplicate saves of the exact same state
+            // Check adjustments in duplicate detection
             if (JSON.stringify(lastItem.data.tableStructure) === JSON.stringify(currentData.tableStructure) &&
                 lastItem.data.customer.name === currentData.customer.name &&
-                lastItem.data.customer.billNo === currentData.customer.billNo) {
+                lastItem.data.customer.billNo === currentData.customer.billNo &&
+                JSON.stringify(lastItem.data.adjustmentChain) === JSON.stringify(currentData.adjustmentChain)) {
                 return;
             }
         }
@@ -5606,12 +5524,34 @@ async function loadFromHistory(item) {
         document.getElementById("custPhone").value = data.customer.phone;
         document.getElementById("custGSTIN").value = data.customer.gstin || '';
 
-        if (data.taxSettings) {
-            discountPercent = data.taxSettings.discountPercent || 0;
-            discountAmount = data.taxSettings.discountAmount || 0;
-            gstPercent = data.taxSettings.gstPercent || 0;
+        // === UPDATE: Load Adjustments (with Migration) ===
+        if (data.adjustmentChain) {
+            // Load new format
+            adjustmentChain = data.adjustmentChain;
+        } else if (data.taxSettings) {
+            // Migrate Legacy History Items
+            adjustmentChain = [];
 
-            await saveTaxSettings();
+            if (data.taxSettings.discountPercent > 0) {
+                adjustmentChain.push({
+                    id: 'legacy-discount', name: 'Discount', type: 'percent',
+                    value: data.taxSettings.discountPercent, operation: 'subtract', textColor: '#e74c3c'
+                });
+            } else if (data.taxSettings.discountAmount > 0) {
+                adjustmentChain.push({
+                    id: 'legacy-discount', name: 'Discount', type: 'amount',
+                    value: data.taxSettings.discountAmount, operation: 'subtract', textColor: '#e74c3c'
+                });
+            }
+
+            if (data.taxSettings.gstPercent > 0) {
+                adjustmentChain.push({
+                    id: 'legacy-gst', name: 'GST', type: 'percent',
+                    value: data.taxSettings.gstPercent, operation: 'add', textColor: '#27ae60'
+                });
+            }
+        } else {
+            adjustmentChain = [];
         }
 
         const createListTbody = document.querySelector("#createListManual tbody");
@@ -5621,7 +5561,7 @@ async function loadFromHistory(item) {
 
         let maxId = 0;
 
-        // Restore table structure in exact saved order
+        // Restore table structure
         if (data.tableStructure && data.tableStructure.length > 0) {
             data.tableStructure.forEach(rowData => {
                 if (rowData.type === 'section') {
@@ -5649,7 +5589,7 @@ async function loadFromHistory(item) {
                         particularsHtml: rowData.particularsHtml,
                         displayQuantity: rowData.displayQuantity,
                         dimensionsVisible: rowData.dimensionsVisible !== false,
-                        convertUnit: rowData.convertUnit // <--- CRITICAL FIX
+                        convertUnit: rowData.convertUnit
                     });
 
                     const idNum = parseInt(rowData.id.split('-')[2]);
@@ -5680,30 +5620,34 @@ async function loadFromHistory(item) {
         }
 
         updateSerialNumbers();
+        // Re-calculate totals based on loaded items and loaded chain
         updateTotal();
         updateGSTINVisibility();
         await saveToLocalStorage();
 
-        // UPDATE DIALOG BOXES
+        // UPDATE LEGACY DIALOG BOXES (Visual only)
         setTimeout(() => {
             const discountTypeSelect = document.getElementById('discount-type-select');
             const discountPercentInput = document.getElementById('discount-percent-input');
             const discountAmountInput = document.getElementById('discount-amount-input');
 
-            if (discountPercent > 0) {
-                if (discountTypeSelect) discountTypeSelect.value = 'percent';
-                if (discountPercentInput) discountPercentInput.value = discountPercent;
-            } else if (discountAmount > 0) {
-                if (discountTypeSelect) discountTypeSelect.value = 'amount';
-                if (discountAmountInput) discountAmountInput.value = discountAmount;
+            // Try to find legacy discount in the chain
+            const legacyDisc = adjustmentChain.find(a => a.id === 'legacy-discount');
+            if (legacyDisc) {
+                discountTypeSelect.value = legacyDisc.type; // percent or amount
+                if (legacyDisc.type === 'percent') discountPercentInput.value = legacyDisc.value;
+                else discountAmountInput.value = legacyDisc.value;
             } else {
-                if (discountTypeSelect) discountTypeSelect.value = 'none';
+                discountTypeSelect.value = 'none';
             }
 
+            // Try to find legacy GST
+            const legacyGST = adjustmentChain.find(a => a.id === 'legacy-gst');
             const gstInput = document.getElementById('gst-input');
-            if (gstInput) gstInput.value = gstPercent;
+            if (legacyGST) gstInput.value = legacyGST.value;
+            else gstInput.value = '';
 
-            handleDiscountTypeChange();
+            if (typeof handleDiscountTypeChange === 'function') handleDiscountTypeChange();
         }, 100);
 
         saveStateToHistory();
@@ -5729,24 +5673,27 @@ function openDiscountModal() {
     const currentSubtotal = getCurrentSubtotal();
     subtotalDisplay.textContent = roundToTwoDecimals(currentSubtotal);
 
-    console.log('Opening modal - Current values:', { discountPercent, discountAmount });
+    // === FIX 2: Check Adjustment Chain for existing legacy discount ===
+    const existingAdj = adjustmentChain.find(a => a.id === 'legacy-discount');
 
-    // DETERMINISTIC SELECTION - don't auto-detect
-    if (discountPercent > 0) {
-        typeSelect.value = 'percent';
-        percentInput.value = roundToTwoDecimals(discountPercent);
-        amountInput.value = '';
-    } else if (discountAmount > 0) {
-        typeSelect.value = 'amount';
-        amountInput.value = roundToTwoDecimals(discountAmount);
-        percentInput.value = '';
+    if (existingAdj) {
+        typeSelect.value = existingAdj.type; // 'percent' or 'amount'
+
+        if (existingAdj.type === 'percent') {
+            percentInput.value = existingAdj.value;
+            amountInput.value = '';
+        } else {
+            amountInput.value = existingAdj.value;
+            percentInput.value = '';
+        }
     } else {
+        // Reset if no discount exists
         typeSelect.value = 'none';
         percentInput.value = '';
         amountInput.value = '';
     }
 
-    // Show/hide relevant inputs
+    // Update visibility of inputs based on selection
     handleDiscountTypeChange();
 
     modal.style.display = 'block';
@@ -5784,67 +5731,81 @@ function calculateWithPrecision(value) {
 
 async function applyDiscountSettings() {
     const type = document.getElementById('discount-type-select').value;
-    const currentSubtotal = getCurrentSubtotal();
 
-    console.log('Applying discount - Type:', type, 'Current values:', { discountPercent, discountAmount });
+    // 1. Remove any existing legacy discount to avoid duplicates
+    adjustmentChain = adjustmentChain.filter(a => a.id !== 'legacy-discount');
 
-    // COMPLETELY RESET based on selection
-    if (type === 'none') {
-        discountPercent = 0;
-        discountAmount = 0;
-        console.log('Reset both to 0');
-    }
-    else if (type === 'percent') {
+    let newDiscount = null;
+
+    // 2. Create new adjustment object based on input
+    if (type === 'percent') {
         const percentValue = parseFloat(document.getElementById('discount-percent-input').value) || 0;
 
-        // ADDED: Prevent discount over 100%
         if (percentValue > 100) {
             showNotification('Discount percentage cannot exceed 100%', 'info');
             return;
         }
 
-        discountPercent = storeWithPrecision(percentValue);
-        discountAmount = storeWithPrecision((discountPercent / 100) * currentSubtotal);
-        console.log('Set percent:', discountPercent, 'Amount:', discountAmount);
+        if (percentValue > 0) {
+            newDiscount = {
+                id: 'legacy-discount',
+                name: 'Discount',
+                type: 'percent',
+                value: percentValue,
+                operation: 'subtract',
+                textColor: '#e74c3c' // Red color
+            };
+        }
     }
     else if (type === 'amount') {
         const amountValue = parseFloat(document.getElementById('discount-amount-input').value) || 0;
+        const currentSubtotal = getCurrentSubtotal(); // Helper function we added earlier
 
-        // ADDED: Prevent discount amount exceeding subtotal
         if (amountValue > currentSubtotal) {
-            showNotification('Discount amount cannot exceed subtotal of ₹' + currentSubtotal.toFixed(2), 'info');
+            showNotification('Discount amount cannot exceed subtotal', 'info');
             return;
         }
 
-        discountAmount = storeWithPrecision(amountValue);
-        // CALCULATE PERCENT FOR DISPLAY ONLY (not for calculation)
-        discountPercent = storeWithPrecision((discountAmount / currentSubtotal) * 100);
-        console.log('Set amount:', discountAmount, 'Calculated display percent:', discountPercent);
+        if (amountValue > 0) {
+            newDiscount = {
+                id: 'legacy-discount',
+                name: 'Discount',
+                type: 'amount',
+                value: amountValue,
+                operation: 'subtract',
+                textColor: '#e74c3c' // Red color
+            };
+        }
     }
 
-    console.log('Final values:', { discountPercent, discountAmount });
-
-    // Save and update
-    await saveTaxSettings();
-
-    if (isGSTMode) {
-        updateGSTTaxCalculation();
-    } else {
-        updateTotal();
+    // 3. Add to Chain (Unshift adds to TOP, usually before Tax)
+    if (newDiscount) {
+        adjustmentChain.unshift(newDiscount);
     }
 
+    // 4. Save and Update
     await saveToLocalStorage();
     saveStateToHistory();
+    updateTotal(); // Triggers new calculation logic
     closeDiscountModal();
+
+    showNotification('Discount applied successfully', 'success');
 }
 
 function openGSTModal() {
-
     const modal = document.getElementById('gst-modal');
     const gstInput = document.getElementById('gst-input');
     const gstinInput = document.getElementById('gstin-input');
 
-    gstInput.value = gstPercent;
+    // === FIX 3: Check Adjustment Chain for existing legacy GST ===
+    const existingAdj = adjustmentChain.find(a => a.id === 'legacy-gst');
+
+    if (existingAdj) {
+        gstInput.value = existingAdj.value;
+    } else {
+        gstInput.value = ''; // Reset to empty if no GST
+    }
+
     gstinInput.value = document.getElementById('custGSTIN').value || '';
 
     modal.style.display = 'block';
@@ -5857,33 +5818,25 @@ function closeGSTModal() {
 
 // Add this NEW function to update GSTIN field visibility
 function updateGSTINVisibility() {
-    const customerGSTINTd = document.getElementById('custGSINTd');
-    const companyGSTINLine = document.getElementById('reg-header-gstin-line');
-    const companyGSTINSpan = document.getElementById('companyGstin');
+    const gstLine = document.getElementById('reg-header-gstin-line');
+    const gstTD = document.getElementById('custGSINTd');
+    const companyGSTINSpan = document.getElementById('companyGstin'); // Ensure this exists
 
-    if (gstPercent > 0) {
-        // 1. Show Customer GSTIN Input
-        if (customerGSTINTd) customerGSTINTd.style.display = ''; // Reset to default (table-cell)
+    // Check if GST exists in the new Adjustment Chain
+    const hasGST = adjustmentChain.some(a => a.id === 'legacy-gst');
 
-        // 2. Show Company GSTIN Line (Only if text exists)
-        if (companyGSTINLine) {
-            const hasText = companyGSTINSpan && 
-                          companyGSTINSpan.textContent && 
-                          companyGSTINSpan.textContent.trim() !== '' &&
-                          companyGSTINSpan.textContent !== 'Your 15-digit GSTIN';
-            
-            companyGSTINLine.style.display = hasText ? 'block' : 'none';
+    if (hasGST) {
+        // Show elements
+        if (gstLine) {
+            // Only show header line if there is actually text content
+            const hasText = companyGSTINSpan && companyGSTINSpan.textContent.trim() !== '' && companyGSTINSpan.textContent !== 'Your 15-digit GSTIN';
+            gstLine.style.display = hasText ? 'block' : 'none';
         }
-
-        // 3. FIX: Ensure the number sits next to the label (Inline)
-        if (companyGSTINSpan) {
-            companyGSTINSpan.style.display = 'inline';
-        }
-
+        if (gstTD) gstTD.style.display = 'table-cell'; // table-cell preserves layout better than block
     } else {
-        // Hide everything if GST is 0%
-        if (customerGSTINTd) customerGSTINTd.style.display = 'none';
-        if (companyGSTINLine) companyGSTINLine.style.display = 'none';
+        // Hide elements
+        if (gstLine) gstLine.style.display = 'none';
+        if (gstTD) gstTD.style.display = 'none';
     }
 }
 
@@ -5895,19 +5848,39 @@ async function applyGSTSettings() {
     const newGSTIN = gstinInput.value.trim();
 
     if (newGST < 0 || newGST > 100) {
+        showNotification('Invalid GST Percentage', 'error');
         return;
     }
 
-    gstPercent = newGST;
+    // 1. Update GSTIN field value
+    const custGSTINEl = document.getElementById('custGSTIN');
+    if (custGSTINEl) custGSTINEl.value = newGSTIN;
 
-    document.getElementById('custGSTIN').value = newGSTIN;
+    // 2. Update Adjustment Chain
+    // Remove existing legacy GST first
+    adjustmentChain = adjustmentChain.filter(a => a.id !== 'legacy-gst');
 
-    await saveTaxSettings();
-    updateTotal();
-    updateGSTINVisibility(); // Add this line to update visibility
+    if (newGST > 0) {
+        const newTax = {
+            id: 'legacy-gst',
+            name: 'GST',
+            type: 'percent',
+            value: newGST,
+            operation: 'add',
+            textColor: '#27ae60' // Green color
+        };
+
+        adjustmentChain.push(newTax);
+    }
+
+    // 3. Save and Update
+    updateGSTINVisibility(); // Call the updated visibility logic
     await saveToLocalStorage();
     saveStateToHistory();
+    updateTotal();
     closeGSTModal();
+
+    showNotification('GST applied successfully', 'success');
 }
 
 async function saveGSTIN() {
@@ -6138,11 +6111,11 @@ function clearCustomerInputs() {
 }
 
 async function clearAllData(silent = false) {
-    // Save current state to history BEFORE clearing (only if there's actual data)
+    // 1. Save current state to history BEFORE clearing (only if there's actual data)
     const hasItems = document.querySelectorAll('#createListManual tbody tr[data-id]').length > 0;
     const hasSections = document.querySelectorAll('#createListManual tbody tr.section-row').length > 0;
-    // ↓↓↓ ADD TAX SETTINGS CHECK ↓↓↓
-    const hasTaxSettings = discountPercent > 0 || discountAmount > 0 || gstPercent > 0;
+    // Check length of chain instead of individual legacy vars
+    const hasTaxSettings = adjustmentChain.length > 0;
 
     if (hasItems || hasSections || hasTaxSettings) {
         // Only save to history if there's actual content to preserve
@@ -6150,11 +6123,10 @@ async function clearAllData(silent = false) {
         await saveToHistory();
     }
 
-
-    // Clear current workspace data
+    // 2. Clear current workspace inputs
     document.getElementById("custName").value = "";
 
-    // ADD THIS: Auto-increment bill number based on saved bills
+    // Auto-increment bill number based on saved bills
     try {
         const savedBills = await getAllFromDB('savedBills');
         let maxBillNo = 0;
@@ -6190,59 +6162,77 @@ async function clearAllData(silent = false) {
     const year = now.getFullYear();
     document.getElementById('billDate').value = `${day}-${month}-${year}`;
 
+    // 3. Clear All Tables
     const createListTbody = document.querySelector("#createListManual tbody");
     const copyListTbody = document.querySelector("#copyListManual tbody");
     createListTbody.innerHTML = "";
     copyListTbody.innerHTML = "";
 
-    // NEW: Clear customer dialog state completely
+    // Clear GST table if exists
+    const gstListTbody = document.querySelector("#gstCopyListManual tbody");
+    if (gstListTbody) {
+        gstListTbody.innerHTML = "";
+    }
+
+    // 4. RESET ADJUSTMENTS & CALCULATIONS (Crucial Fix)
+    adjustmentChain = []; // Empty the new chain
+    discountPercent = 0;  // Reset legacy vars for safety
+    discountAmount = 0;
+    gstPercent = 0;
+
+    rowCounterManual = 1;
+    currentlyEditingRowIdManual = null;
+
+    currentDimensions = {
+        type: 'none',
+        unit: 'ft',
+        values: [0, 0, 0],
+        calculatedArea: 0
+    };
+
+    // 5. Reset Customer Dialog State (GST Mode Forms)
     try {
         await removeFromDB('gstMode', 'customerDialogState');
-        // Also reset the customer type to default
-        document.getElementById('customer-type').value = 'bill-to';
-        handleCustomerTypeChange();
+        // Reset the customer type to default
+        const custTypeEl = document.getElementById('customer-type');
+        if (custTypeEl) {
+            custTypeEl.value = 'bill-to';
+            handleCustomerTypeChange();
+        }
 
         // CLEAR ALL CUSTOMER DIALOG FORM FIELDS
-        document.getElementById('consignee-name').value = '';
-        document.getElementById('consignee-address').value = '';
-        document.getElementById('consignee-gst').value = '';
-        document.getElementById('consignee-state').value = 'Maharashtra';
-        document.getElementById('consignee-code').value = '27';
-        document.getElementById('consignee-contact').value = '';
+        const inputsToClear = [
+            'consignee-name', 'consignee-address', 'consignee-gst', 'consignee-contact',
+            'consignee-state', 'consignee-code',
+            'buyer-name', 'buyer-address', 'buyer-gst', 'buyer-contact',
+            'buyer-state', 'buyer-code', 'place-of-supply',
+            'invoice-no'
+        ];
 
-        document.getElementById('buyer-name').value = '';
-        document.getElementById('buyer-address').value = '';
-        document.getElementById('buyer-gst').value = '';
-        document.getElementById('buyer-state').value = 'Maharashtra';
-        document.getElementById('buyer-code').value = '27';
-        document.getElementById('buyer-contact').value = '';
-        document.getElementById('place-of-supply').value = 'Maharashtra';
+        inputsToClear.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                // Keep defaults for state/code
+                if (id.includes('state') && !id.includes('place')) el.value = 'Maharashtra';
+                else if (id.includes('code')) el.value = '27';
+                else el.value = '';
+            }
+        });
 
-        // ADD THIS: Set today's date in customer dialog modal
-        const today = new Date();
-        const day = String(today.getDate()).padStart(2, '0');
-        const month = String(today.getMonth() + 1).padStart(2, '0');
-        const year = today.getFullYear();
+        // Set today's date in customer dialog modal
         document.getElementById('invoice-date').value = `${day}-${month}-${year}`;
 
     } catch (error) {
         console.error('Error clearing customer dialog state:', error);
     }
 
-
-    // NEW: Clear GST customer details and reset to default HTML
+    // 6. Reset GST Mode Display Elements
     if (isGSTMode) {
-        // Generate fresh invoice number (highest + 1) and update both modal and bill view
+        // Generate fresh invoice number (highest + 1)
         await generateNextInvoiceNumber();
         document.getElementById('bill-invoice-no').textContent = document.getElementById('invoice-no').value;
 
-        // Set today's date in "05 NOV 2025" format
-        const today = new Date();
-        const day = String(today.getDate()).padStart(2, '0');
-        // const month = today.toLocaleString('en', { month: 'short' }).toUpperCase();
-        const month = String(today.getMonth() + 1).padStart(2, '0');
-        console.log(month, "this is pain");
-        const year = today.getFullYear();
+        // Reset date display
         document.getElementById('bill-date-gst').textContent = `${day}-${month}-${year}`;
 
         // Reset Bill To to default placeholders
@@ -6253,7 +6243,7 @@ async function clearAllData(silent = false) {
         document.getElementById('billToStateCode').textContent = '27';
         document.getElementById('billToContact').textContent = 'Not provided';
 
-        // Hide and reset Ship To to default placeholders
+        // Hide and reset Ship To
         document.getElementById('shipTo').style.display = 'none';
         document.getElementById('shipToName').textContent = '';
         document.getElementById('shipToAddr').textContent = '';
@@ -6264,37 +6254,13 @@ async function clearAllData(silent = false) {
         document.getElementById('shipToPOS').textContent = '';
     }
 
-    // Clear GST table if exists
-    const gstListTbody = document.querySelector("#gstCopyListManual tbody");
-    if (gstListTbody) {
-        gstListTbody.innerHTML = "";
-    }
-    if (isGSTMode) {
-        updateGSTTaxCalculation();
-    }
-
-    rowCounterManual = 1;
-    currentlyEditingRowIdManual = null;
-
-    discountPercent = 0;
-    discountAmount = 0;
-    gstPercent = 0;
-
-    currentDimensions = {
-        type: 'none',
-        unit: 'ft',
-        values: [0, 0, 0],
-        calculatedArea: 0
-    };
-
+    // 7. Update UI & Reset Modals
     updateSerialNumbers();
-    updateTotal();
-    // Reset edit mode when clearing all data
+    updateTotal(); // This will now correctly render "Total: 0.00"
     resetEditMode();
 
-    // RESET DISCOUNT AND GST DIALOGS
+    // Reset legacy discount/GST modals just in case
     setTimeout(() => {
-        // Reset discount modal
         const discountTypeSelect = document.getElementById('discount-type-select');
         const discountPercentInput = document.getElementById('discount-percent-input');
         const discountAmountInput = document.getElementById('discount-amount-input');
@@ -6303,30 +6269,23 @@ async function clearAllData(silent = false) {
         if (discountPercentInput) discountPercentInput.value = '';
         if (discountAmountInput) discountAmountInput.value = '';
 
-        // Reset GST modal
         const gstInput = document.getElementById('gst-input');
         const gstinInput = document.getElementById('gstin-input');
 
         if (gstInput) gstInput.value = '';
         if (gstinInput) gstinInput.value = '';
 
-        // Update UI
         handleDiscountTypeChange();
     }, 100);
 
-    // SAVE TAX SETTINGS TO DB (THIS IS THE KEY FIX)
+    // 8. Persist the Empty State to DB
     await saveTaxSettings();
     await saveToLocalStorage();
-
     await saveCustomerDialogState();
-    // Save the empty state to localStorage but NOT to history
-
-    // ADD THIS: Force save the cleared customer details state
     await saveGSTCustomerDataToLocalStorage();
 
     if (!silent) {
-        // Show confirmation message
-        console.log('All data cleared. Previous bills are preserved in history.');
+        console.log('All data cleared.');
     }
 }
 
@@ -6840,6 +6799,11 @@ function handleDrop(e) {
 
         updateSerialNumbers();
         updateTotal();
+        
+        // FIX: Recalculate section totals immediately after drop
+        // This ensures total rows appear/move correctly when sections/items are reordered
+        updateSectionTotals(); 
+
         saveToLocalStorage();
         saveStateToHistory();
 
@@ -7336,8 +7300,18 @@ async function toggleGSTMode() {
     if (enableGST !== isGSTMode) {
         isGSTMode = enableGST;
         await setInDB('gstMode', 'isGSTMode', isGSTMode);
+
         updateUIForGSTMode();
         closeGSTModeModal();
+
+        // === FIX: Force Recalculate Totals & Adjustments after Mode Switch ===
+        // This ensures the table rebuilds with the correct structure (Regular vs GST)
+        // and applies the adjustment chain immediately.
+        setTimeout(() => {
+            updateTotal();
+            // Also ensure GSTIN visibility is correct for the new mode
+            updateGSTINVisibility();
+        }, 100);
 
         // Show appropriate message
         if (isGSTMode) {
@@ -7666,7 +7640,7 @@ async function loadCompanyInfo() {
         const info = await getFromDB('companyInfo', 'companyInfo');
         if (info) {
             companyInfo = info;
-            
+
             // 1. Populate Modal Inputs
             document.getElementById('company-name').value = info.name || '';
             document.getElementById('company-address').value = info.address || '';
@@ -7697,13 +7671,13 @@ async function loadCompanyInfo() {
 
             // Name
             if (regName) regName.textContent = info.name || 'COMPANY NAME';
-            
+
             // Address - Hide if empty
             if (regAddr) {
                 regAddr.textContent = info.address || '';
                 regAddr.style.display = (info.address && info.address.trim().length > 0) ? 'block' : 'none';
             }
-            
+
             // GSTIN - Set text (Visibility handled by updateGSTINVisibility below)
             if (regGstin) regGstin.textContent = info.gstin || '';
 
@@ -7720,7 +7694,7 @@ async function loadCompanyInfo() {
                 const hasEmail = info.email && info.email.trim().length > 0;
                 regEmailLine.style.display = hasEmail ? 'block' : 'none';
             }
-            
+
             if (typeof updateBrandingUI === 'function') {
                 updateBrandingUI();
             }
@@ -7754,8 +7728,8 @@ async function saveCompanyInfo() {
         companyInfo = companyData;
 
         // REFRESH UI IMMEDIATELY
-        await loadCompanyInfo(); 
-        
+        await loadCompanyInfo();
+
         closeCompanyInfoModal();
         showNotification('Company info saved successfully!', 'success');
     } catch (error) {
@@ -8046,50 +8020,47 @@ function updateGSTTaxCalculation() {
     updateAmountInWords(grandTotal);
 }
 
-function updateTaxBreakdownTable(taxData, taxableValue, cgstAmount, sgstAmount, igstAmount) {
+/// Updated helper for GST Tax Table (Simplified for Adjustment Chain)
+function updateTaxBreakdownTable(taxDataMap, taxableValue, cgst, sgst, igst) {
     const tbody = document.getElementById('bill-tax-tbody');
+    if (!tbody) return;
     tbody.innerHTML = '';
 
-    if (Object.keys(taxData).length === 0) {
-        const row = document.createElement('tr');
-        row.id = 'gst-no-tax-data';
-        row.innerHTML = `<td colspan="7" class="align-center">No tax data available</td>`;
-        tbody.appendChild(row);
-        return;
-    }
+    // Calculate total tax for display
+    const totalTax = (cgst + sgst + igst).toFixed(2);
 
-    Object.entries(taxData).forEach(([hsn, data]) => {
-        const row = document.createElement('tr');
-        const cgstRate = transactionType === 'intrastate' ? (currentGSTPercent / 2).toFixed(2) + '%' : '-';
-        const sgstRate = transactionType === 'intrastate' ? (currentGSTPercent / 2).toFixed(2) + '%' : '-';
-        const itemCgst = transactionType === 'intrastate' ? (data.taxableValue * (currentGSTPercent / 200)).toFixed(2) : '0.00';
-        const itemSgst = transactionType === 'intrastate' ? (data.taxableValue * (currentGSTPercent / 200)).toFixed(2) : '0.00';
-        const totalTax = (parseFloat(itemCgst) + parseFloat(itemSgst)).toFixed(2);
+    // Determine rates string based on mode
+    const cgstRate = transactionType === 'intrastate' ? (currentGSTPercent / 2).toFixed(2) + '%' : '-';
+    const sgstRate = transactionType === 'intrastate' ? (currentGSTPercent / 2).toFixed(2) + '%' : '-';
+    const igstRate = transactionType === 'interstate' ? currentGSTPercent.toFixed(2) + '%' : '-';
 
-        row.innerHTML = `
-            <td>${hsn}</td>
-            <td style="text-align:center;">${data.taxableValue.toFixed(2)}</td>
-            <td style="text-align:center;">${cgstRate}</td>
-            <td>${itemCgst}</td>
-            <td>${sgstRate}</td>
-            <td>${itemSgst}</td>
-            <td>${totalTax}</td>
-        `;
-        tbody.appendChild(row);
-    });
+    // Create a single summary row representing the final calculated values
+    const row = document.createElement('tr');
+    row.innerHTML = `
+        <td class="align-center">All Items</td>
+        <td class="align-center">${taxableValue.toFixed(2)}</td>
+        <td class="align-center">${cgstRate}</td>
+        <td class="align-center">${cgst.toFixed(2)}</td>
+        <td class="align-center">${sgstRate}</td>
+        <td class="align-center">${sgst.toFixed(2)}</td>
+        <td class="align-center">${totalTax}</td>
+    `;
+    tbody.appendChild(row);
 
-    // Add totals row with discounted taxable value
+    // Add totals row (Visual consistency)
     const totalsRow = document.createElement('tr');
     totalsRow.id = 'tax-section-totals';
-    const totalTaxAmount = (cgstAmount + sgstAmount + igstAmount).toFixed(2);
+    totalsRow.style.fontWeight = 'bold';
+    totalsRow.style.backgroundColor = '#f8f9fa';
+
     totalsRow.innerHTML = `
-        <td class="align-center"><strong>TOTAL</strong></td>
-        <td class="align-center"><strong>${taxableValue.toFixed(2)}</strong></td>
+        <td class="align-center">TOTAL</td>
+        <td class="align-center">${taxableValue.toFixed(2)}</td>
         <td></td>
-        <td class="align-center"><strong>${cgstAmount.toFixed(2)}</strong></td>
+        <td class="align-center">${cgst.toFixed(2)}</td>
         <td></td>
-        <td class="align-center"><strong>${sgstAmount.toFixed(2)}</strong></td>
-        <td class="align-center"><strong>${totalTaxAmount}</strong></td>
+        <td class="align-center">${sgst.toFixed(2)}</td>
+        <td class="align-center">${totalTax}</td>
     `;
     tbody.appendChild(totalsRow);
 }
@@ -8572,15 +8543,18 @@ async function getGSTBillData() {
             gstPercent: currentGSTPercent,
             discountPercent: discountPercent
         },
+        // === FIX: Save Adjustment Chain ===
+        adjustmentChain: adjustmentChain,
+
         tableStructure: [],
         items: [],
         totals: {
-            subtotal: parseFloat(document.getElementById('gst-sub-total').textContent) || 0,
-            discount: parseFloat(document.getElementById('gst-discount-amount').textContent.replace('-', '')) || 0,
-            cgst: parseFloat(document.getElementById('gst-cgst-amount').textContent) || 0,
-            sgst: parseFloat(document.getElementById('gst-sgst-amount').textContent) || 0,
-            igst: parseFloat(document.getElementById('gst-igst-amount').textContent) || 0,
-            grandTotal: parseFloat(document.getElementById('gst-grand-total').textContent) || 0
+            subtotal: parseFloat(document.getElementById('gst-sub-total')?.textContent) || 0,
+            // Fallbacks for elements that might be hidden/missing if no adjustments
+            cgst: parseFloat(document.getElementById('gst-cgst-amount')?.textContent) || 0,
+            sgst: parseFloat(document.getElementById('gst-sgst-amount')?.textContent) || 0,
+            igst: parseFloat(document.getElementById('gst-igst-amount')?.textContent) || 0,
+            grandTotal: parseFloat(document.getElementById('gst-grand-total')?.textContent) || 0
         }
     };
 
@@ -8620,10 +8594,9 @@ async function getGSTBillData() {
                 rate: parseFloat(cells[5].textContent).toFixed(2),
                 amount: parseFloat(cells[6].textContent).toFixed(2),
                 notes: notes,
-                // FIXED: Save Discount Data
+                // Save Discount/Dim Data for reconstruction
                 discountType: row.getAttribute('data-discount-type') || 'none',
                 discountValue: row.getAttribute('data-discount-value') || 0,
-                // Save Dimension Data for reconstruction
                 dimensionType: row.getAttribute('data-dimension-type') || 'none',
                 dimensionValues: JSON.parse(row.getAttribute('data-dimension-values') || '[0,0,0]'),
                 dimensionUnit: row.getAttribute('data-dimension-unit') || 'ft',
@@ -8721,13 +8694,13 @@ async function loadGSTSavedBill(billId) {
         const savedBill = await getFromDB('gstSavedBills', billId);
         if (!savedBill) return;
 
-        // Load company info
+        // 1. Load company info
         if (savedBill.companyInfo) {
             companyInfo = savedBill.companyInfo;
             updateGSTBillCompanyInfo();
         }
 
-        // Load customer details to GST bill display
+        // 2. Load customer details to GST bill display
         if (savedBill.customer) {
             document.getElementById('billToName').textContent = savedBill.customer.billTo?.name || '';
             document.getElementById('billToAddr').textContent = savedBill.customer.billTo?.address || '';
@@ -8769,7 +8742,7 @@ async function loadGSTSavedBill(billId) {
             }
         }
 
-        // Load invoice details
+        // 3. Load invoice details
         if (savedBill.invoiceDetails) {
             document.getElementById('bill-invoice-no').textContent = savedBill.invoiceDetails.number;
             document.getElementById('bill-date-gst').textContent = savedBill.invoiceDetails.date;
@@ -8781,17 +8754,46 @@ async function loadGSTSavedBill(billId) {
 
         if (savedBill.customerType) {
             document.getElementById('customer-type').value = savedBill.customerType;
-            handleCustomerTypeChange(); // This will show/hide Ship To section
+            handleCustomerTypeChange();
         }
 
-        // Load tax settings
+        // 4. Load tax settings variables
         if (savedBill.taxSettings) {
             transactionType = savedBill.taxSettings.transactionType || 'intrastate';
             currentGSTPercent = savedBill.taxSettings.gstPercent || 18;
             discountPercent = savedBill.taxSettings.discountPercent || 0;
         }
 
-        // Clear current items and load saved items
+        // === 5. RESTORE ADJUSTMENT CHAIN (With Legacy Migration) ===
+        if (savedBill.adjustmentChain) {
+            adjustmentChain = savedBill.adjustmentChain;
+        } else if (savedBill.taxSettings) {
+            // Migrate Legacy Bills
+            adjustmentChain = [];
+            // Migrate Discount
+            if (savedBill.taxSettings.discountPercent > 0) {
+                adjustmentChain.push({
+                    id: 'legacy-discount', name: 'Discount', type: 'percent',
+                    value: savedBill.taxSettings.discountPercent, operation: 'subtract', textColor: '#e74c3c'
+                });
+            } else if (savedBill.taxSettings.discountAmount > 0) {
+                adjustmentChain.push({
+                    id: 'legacy-discount', name: 'Discount', type: 'amount',
+                    value: savedBill.taxSettings.discountAmount, operation: 'subtract', textColor: '#e74c3c'
+                });
+            }
+            // Migrate GST
+            if (savedBill.taxSettings.gstPercent > 0) {
+                adjustmentChain.push({
+                    id: 'legacy-gst', name: 'GST', type: 'percent',
+                    value: savedBill.taxSettings.gstPercent, operation: 'add', textColor: '#27ae60'
+                });
+            }
+        } else {
+            adjustmentChain = [];
+        }
+
+        // 6. Clear current items and load saved items
         const createListTbody = document.querySelector("#createListManual tbody");
         const copyListTbody = document.querySelector("#copyListManual tbody");
         const gstListTbody = document.querySelector("#gstCopyListManual tbody");
@@ -8823,7 +8825,10 @@ async function loadGSTSavedBill(billId) {
                         hsnCode: rowData.hsn,
                         productCode: rowData.productCode,
                         discountType: rowData.discountType,
-                        discountValue: rowData.discountValue
+                        discountValue: rowData.discountValue,
+                        // Pass through new fields if they exist
+                        dimensionToggles: rowData.dimensionToggles,
+                        convertUnit: rowData.convertUnit
                     });
 
                     const idNum = parseInt(rowData.id.split('-')[2]);
@@ -8832,11 +8837,10 @@ async function loadGSTSavedBill(billId) {
             });
             rowCounterManual = maxId + 1;
         }
-        // Backward compatibility: Load old items structure if no tableStructure
+        // Backward compatibility
         else if (savedBill.items && savedBill.items.length > 0) {
             let maxId = 0;
             savedBill.items.forEach(item => {
-                // Create item in all tables
                 createItemInAllTablesFromSaved({
                     type: 'item',
                     id: item.id,
@@ -8862,6 +8866,8 @@ async function loadGSTSavedBill(billId) {
         }
 
         updateSerialNumbers();
+
+        // 7. Update Calculations (uses the loaded adjustmentChain)
         updateTotal();
 
         if (isGSTMode) {
@@ -8869,56 +8875,33 @@ async function loadGSTSavedBill(billId) {
             updateGSTTaxCalculation();
         }
 
-        // Save the loaded state
+        // 8. Save the loaded state
         await saveToLocalStorage();
         saveStateToHistory();
-        // ADD THIS LINE RIGHT HERE:
         await saveCustomerDialogState();
 
-        // Store the saved invoice data for when customer modal is opened
+        // Store invoice data for modal
         window.currentSavedBillInvoiceData = {
             number: savedBill.invoiceDetails?.number,
             date: savedBill.invoiceDetails?.date
         };
+
         showNotification('GST bill loaded successfully');
 
-        // FORCE REFRESH THE BILL DISPLAY - THIS IS THE KEY FIX
+        // 9. FORCE REFRESH THE BILL DISPLAY
         setTimeout(() => {
             updateGSTBillDisplay();
             copyItemsToGSTBill();
             updateGSTTaxCalculation();
 
-            // Ensure customer details are visible in bill view
+            // Recalculate totals one last time to ensure UI sync with adjustment chain
+            updateTotal();
+
+            // Ensure customer details visible
             if (savedBill.customer) {
                 document.getElementById('billToName').textContent = savedBill.customer.billTo?.name || '';
-                document.getElementById('billToAddr').textContent = savedBill.customer.billTo?.address || '';
-                document.getElementById('billToGstin').textContent = savedBill.customer.billTo?.gstin || 'customer 15-digit GSTIN';
-                document.getElementById('billToContact').textContent = savedBill.customer.billTo?.contact || 'Not provided';
-                document.getElementById('billToState').textContent = savedBill.customer.billTo?.state || 'maharashtra';
-                document.getElementById('billToStateCode').textContent = savedBill.customer.billTo?.stateCode || '27';
-
-                // Handle ship to section
-                const shipToDiv = document.getElementById('shipTo');
-                if (savedBill.customerType === 'both' && savedBill.customer.shipTo?.name) {
-                    shipToDiv.style.display = 'block';
-                    document.getElementById('shipToName').textContent = savedBill.customer.shipTo.name;
-                    document.getElementById('shipToAddr').textContent = savedBill.customer.shipTo.address;
-                    document.getElementById('shipToGstin').textContent = savedBill.customer.shipTo.gstin;
-                    document.getElementById('shipToContact').textContent = savedBill.customer.shipTo?.contact || 'Not provided';
-                    document.getElementById('shipToState').textContent = savedBill.customer.shipTo.state;
-                    document.getElementById('shipToStateCode').textContent = savedBill.customer.shipTo.stateCode;
-                    document.getElementById('shipToPOS').textContent = savedBill.customer.shipTo.placeOfSupply;
-                } else {
-                    shipToDiv.style.display = 'none';
-                }
+                // ... (other field updates handled by updateGSTBillDisplay) ...
             }
-
-            // Update invoice details in bill view
-            if (savedBill.invoiceDetails) {
-                document.getElementById('bill-invoice-no').textContent = savedBill.invoiceDetails.number;
-                document.getElementById('bill-date-gst').textContent = savedBill.invoiceDetails.date;
-            }
-
         }, 100);
 
     } catch (error) {
@@ -8957,6 +8940,9 @@ function updateGSTBillDisplay() {
 
     // Update totals and tax calculations (with safety check inside the function)
     updateGSTTaxCalculation();
+
+    // FIX: Calculate and insert section total rows for GST table
+    updateSectionTotals();
 }
 
 function copyItemsToGSTBill() {
@@ -8976,7 +8962,11 @@ function copyItemsToGSTBill() {
         if (regularRow.classList.contains('section-row')) {
             // Handle section rows
             const sectionId = regularRow.getAttribute('data-section-id');
+            // FIX: Get the show-total attribute from the source row
+            const showTotal = regularRow.getAttribute('data-show-total');
+
             const cell = regularRow.querySelector('td');
+            // Clean name: remove buttons text if present
             const name = cell.textContent.replace('−', '').replace('+', '').trim();
             const styleString = cell.getAttribute('style') || '';
 
@@ -8984,13 +8974,16 @@ function copyItemsToGSTBill() {
             const gstRow = document.createElement('tr');
             gstRow.className = 'section-row';
             gstRow.setAttribute('data-section-id', sectionId);
+            // FIX: Set the attribute on the new GST row
+            if (showTotal) gstRow.setAttribute('data-show-total', showTotal);
+
             gstRow.setAttribute('draggable', 'true');
 
             gstRow.innerHTML = `
-        <td colspan="8" style="${styleString}">
-            ${name}
-        </td>
-    `;
+                <td colspan="8" style="${styleString}">
+                    ${name}
+                </td>
+            `;
 
             addDragAndDropListeners(gstRow);
             gstTable.appendChild(gstRow);
@@ -9000,9 +8993,7 @@ function copyItemsToGSTBill() {
 
             const cells = regularRow.children;
             const particularsDiv = cells[1];
-            const itemName = particularsDiv.querySelector('.itemNameClass')?.textContent.trim() || '';
-            const notes = particularsDiv.querySelector('.notes')?.textContent || '';
-
+            
             // Get HSN from saved item if available
             let hsnCode = regularRow.getAttribute('data-hsn') || '';
 
@@ -9015,17 +9006,6 @@ function copyItemsToGSTBill() {
             gstRow.setAttribute('data-id', regularRow.getAttribute('data-id'));
             gstRow.setAttribute('data-hsn', hsnCode);
 
-            gstRow.innerHTML = `
-                <td class="sr-no">${itemCounter}</td>
-                <td>${particularsDiv.innerHTML}</td>
-                <td>${hsnCode}</td>
-                <td>${cells[2].textContent}</td>
-                <td>${cells[3].textContent}</td>
-                <td>${adjustedRate.toFixed(2)}</td>
-                <td class="amount">${adjustedAmount.toFixed(2)}</td>
-                
-            `;
-
             // Copy all data attributes including adjusted rates
             const attributes = ['data-dimension-type', 'data-dimension-values', 'data-dimension-unit', 'data-original-quantity', 'data-product-code', 'data-discount-type', 'data-discount-value', 'data-rate', 'data-amount', 'data-original-rate'];
             attributes.forEach(attr => {
@@ -9034,6 +9014,16 @@ function copyItemsToGSTBill() {
                 }
             });
 
+            gstRow.innerHTML = `
+                <td class="sr-no">${itemCounter}</td>
+                <td>${particularsDiv.innerHTML}</td>
+                <td>${hsnCode}</td>
+                <td>${cells[2].textContent}</td>
+                <td>${cells[3].textContent}</td>
+                <td>${adjustedRate.toFixed(2)}</td>
+                <td class="amount">${adjustedAmount.toFixed(2)}</td>
+            `;
+
             addDragAndDropListeners(gstRow);
             gstTable.appendChild(gstRow);
         }
@@ -9041,6 +9031,9 @@ function copyItemsToGSTBill() {
 
     // Update GST calculations after copying items
     updateGSTTaxCalculation();
+    
+    // FIX: Explicitly call updateSectionTotals here to ensure they appear immediately
+    updateSectionTotals();
 }
 
 //GST STATE SAVE
@@ -9291,15 +9284,15 @@ function showCustomerDetailsSummary() {
 }
 
 
+// [REPLACE EXISTING saveCustomerDetails FUNCTION]
 async function saveCustomerDetails() {
     const invoiceNo = document.getElementById('invoice-no').value.trim();
     const invoiceDate = document.getElementById('invoice-date').value;
     const gstPercent = parseFloat(document.getElementById('gst-percent-input').value);
     const customerType = document.getElementById('customer-type').value;
 
-    // FIX: Proper duplicate check for edit mode
+    // Check for duplicate invoice number
     if (editMode && currentEditingBillId) {
-        // In edit mode, only check duplicate if invoice number changed
         if (invoiceNo !== window.currentEditingBillOriginalNumber) {
             const isDuplicate = await checkDuplicateInvoiceNumber(invoiceNo);
             if (isDuplicate) {
@@ -9308,7 +9301,6 @@ async function saveCustomerDetails() {
             }
         }
     } else {
-        // Normal mode - always check duplicate
         const isDuplicate = await checkDuplicateInvoiceNumber(invoiceNo);
         if (isDuplicate) {
             showNotification('Invoice number already exists! Please use a different number.', 'error');
@@ -9328,7 +9320,7 @@ async function saveCustomerDetails() {
     document.getElementById('billToStateCode').textContent = document.getElementById('consignee-code').value;
     document.getElementById('billToContact').textContent = document.getElementById('consignee-contact').value || '';
 
-    // Update ship to details if applicable
+    // Update ship to details
     const shipToDiv = document.getElementById('shipTo');
     if (customerType === 'both') {
         shipToDiv.style.display = 'block';
@@ -9343,35 +9335,38 @@ async function saveCustomerDetails() {
         shipToDiv.style.display = 'none';
     }
 
-    // Update transaction type and GST percent
+    // Update Global Variables
     transactionType = document.getElementById('transaction_type').value;
     currentGSTPercent = gstPercent;
 
-    // --- NEW: Auto-apply rates based on the entered GSTIN ---
-    // This fixes the issue where adding items first then customer didn't apply rates
+    // Auto-apply rates logic
     if (autoApplyCustomerRates) {
         const gstin = document.getElementById('consignee-gst').value.trim();
         if (gstin) {
             await checkAndApplyCustomerRates(gstin);
         }
     }
-    // -------------------------------------------------------
 
-    // Save customer dialog state before closing
+    // Save states
     await saveCustomerDialogState();
-
-    // ADD THIS: Save GST customer data to localStorage
     await saveGSTCustomerDataToLocalStorage();
 
     closeCustomerDetailsModal();
+
+    // === FIX: Force Table Regeneration Immediately ===
+    // This calls calculateAdjustments(), which re-renders the HTML 
+    // with the correct display:none logic based on the new transactionType
+    updateTotal();
+
+    // Update breakdown table
     updateGSTTaxCalculation();
 
-    // Save GST state to DB
     await saveGSTStateToDB();
 
-    // Show success notification
     showNotification('Customer details saved successfully!', 'success');
 }
+
+
 // Add auto-save on input changes
 function setupCustomerDialogAutoSave() {
     const inputs = [
@@ -9434,6 +9429,104 @@ function handlePaddingTypeChange() {
     }
 }
 
+function updateSectionTotals() {
+    const tables = ['createListManual', 'copyListManual', 'gstCopyListManual'];
+
+    tables.forEach(tableId => {
+        const table = document.getElementById(tableId);
+        if (!table) return;
+
+        // Remove existing total rows to avoid duplicates
+        table.querySelectorAll('.section-total-row').forEach(row => row.remove());
+
+        const rows = Array.from(table.querySelectorAll('tbody tr'));
+        let currentSectionId = null;
+        let currentSectionTotal = 0;
+        let currentSectionName = '';
+        let showTotalForCurrent = false;
+        let lastItemRow = null;
+
+        const insertTotalRow = () => {
+            if (showTotalForCurrent && lastItemRow && currentSectionTotal > 0) {
+                const totalRow = document.createElement('tr');
+                totalRow.className = 'section-total-row';
+                totalRow.setAttribute('data-for-section', currentSectionId);
+
+                // Determine colspan based on table structure
+                let labelColSpan;
+                // GST Table: Sr, Particulars, HSN, Qty, Unit, Rate, Amount (Index 6)
+                // Regular Table: Sr, Particulars, Qty, Unit, Rate, Amount (Index 5)
+                if (tableId === 'gstCopyListManual') {
+                    labelColSpan = 6;
+                } else {
+                    labelColSpan = 5;
+                }
+
+                const labelCell = document.createElement('td');
+                labelCell.colSpan = labelColSpan;
+                labelCell.style.textAlign = 'right';
+                labelCell.style.fontWeight = 'bold';
+                labelCell.style.paddingRight = '10px';
+                labelCell.textContent = `Total ${currentSectionName}:`;
+
+                const amountCell = document.createElement('td');
+                amountCell.style.textAlign = 'center';
+                amountCell.style.fontWeight = 'bold';
+                amountCell.textContent = currentSectionTotal.toFixed(2);
+
+                totalRow.appendChild(labelCell);
+                totalRow.appendChild(amountCell);
+
+                // Add empty cell for Actions column if needed
+                if (tableId === 'createListManual' || tableId === 'gstCopyListManual') {
+                    const emptyCell = document.createElement('td');
+                    totalRow.appendChild(emptyCell);
+                }
+
+                lastItemRow.parentNode.insertBefore(totalRow, lastItemRow.nextSibling);
+            }
+        };
+
+        rows.forEach(row => {
+            if (row.classList.contains('section-row')) {
+                // Close previous section
+                if (currentSectionId) insertTotalRow();
+
+                // Start new section
+                currentSectionId = row.getAttribute('data-section-id');
+                
+                // FIX: Safely get text node only (ignoring buttons like '-', 'close')
+                const td = row.querySelector('td');
+                currentSectionName = '';
+                if (td) {
+                    for (let node of td.childNodes) {
+                        if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+                            currentSectionName = node.textContent.trim();
+                            break;
+                        }
+                    }
+                }
+                // Fallback if no text node found
+                if (!currentSectionName) currentSectionName = 'Section';
+
+                showTotalForCurrent = row.getAttribute('data-show-total') === 'true';
+                currentSectionTotal = 0;
+                lastItemRow = null;
+            } else if (row.getAttribute('data-id')) {
+                // Accumulate item
+                if (currentSectionId) {
+                    const amount = parseFloat(row.getAttribute('data-amount') || 0);
+                    currentSectionTotal += amount;
+                    lastItemRow = row;
+                }
+            }
+        });
+
+        // Handle last section
+        if (currentSectionId) insertTotalRow();
+    });
+}
+
 function resetSectionModal() {
     // Reset all fields to default values
     document.getElementById('section-name').value = '';
@@ -9445,6 +9538,7 @@ function resetSectionModal() {
     document.getElementById('section-text-transform').value = 'none';
     document.getElementById('section-padding-type').value = 'padding-left';
     document.getElementById('section-padding-value').value = '75';
+    document.getElementById('section-show-total').checked = false; // NEW: Reset checkbox
 
     // Reset custom padding
     document.getElementById('section-padding-left').value = '';
@@ -9465,7 +9559,8 @@ function resetSectionModal() {
         paddingLeft: '',
         paddingRight: '',
         paddingTop: '',
-        paddingBottom: ''
+        paddingBottom: '',
+        showTotal: false // NEW
     };
 
     // Reset visibility
@@ -9536,6 +9631,10 @@ function editSection(sectionId) {
     document.getElementById('section-font-color').value = rgbToHex(cell.style.color) || '#000000';
     document.getElementById('section-font-size').value = parseInt(cell.style.fontSize) || 16;
     document.getElementById('section-text-transform').value = cell.style.textTransform || 'none';
+
+    // NEW: Load checkbox state
+    const showTotal = row.getAttribute('data-show-total') === 'true';
+    document.getElementById('section-show-total').checked = showTotal;
 
     // FIX: Parse padding correctly
     const paddingStyle = cell.style.padding || '';
@@ -9669,6 +9768,9 @@ function saveSection() {
     const textTransform = document.getElementById('section-text-transform').value;
     const paddingType = document.getElementById('section-padding-type').value;
     const paddingValue = document.getElementById('section-padding-value').value;
+    
+    // FIX: Capture the checkbox state
+    const showTotal = document.getElementById('section-show-total').checked; 
 
     let paddingStyle = '';
     if (paddingType && paddingValue) {
@@ -9707,20 +9809,24 @@ function saveSection() {
         paddingLeft: document.getElementById('section-padding-left').value || '',
         paddingRight: document.getElementById('section-padding-right').value || '',
         paddingTop: document.getElementById('section-padding-top').value || '',
-        paddingBottom: document.getElementById('section-padding-bottom').value || ''
+        paddingBottom: document.getElementById('section-padding-bottom').value || '',
+        showTotal: showTotal // FIX: Save state for next time
     };
 
     if (currentlyEditingSectionId) {
-        // Update existing section
-        updateSectionInAllTables(currentlyEditingSectionId, name, styleString);
+        // Update existing section (Pass showTotal)
+        updateSectionInAllTables(currentlyEditingSectionId, name, styleString, showTotal);
     } else {
-        // Create new section
-        createSectionInAllTables(name, styleString);
+        // Create new section (Pass showTotal)
+        createSectionInAllTables(name, styleString, showTotal);
     }
 
     closeSectionModal();
     saveToLocalStorage();
     saveStateToHistory();
+    
+    // FIX: Recalculate totals immediately after saving
+    updateSectionTotals(); 
 }
 
 function createSectionInAllTablesFromSaved(sectionData) {
@@ -9734,6 +9840,7 @@ function createSectionInAllTablesFromSaved(sectionData) {
         const tr = document.createElement('tr');
         tr.className = 'section-row';
         tr.setAttribute('data-section-id', sectionData.id);
+        tr.setAttribute('data-show-total', sectionData.showTotal || false); // NEW: Restore saved state
         tr.setAttribute('draggable', 'true');
 
         const colspan = tableId === 'gstCopyListManual' ? '8' : '7';
@@ -9764,18 +9871,18 @@ function createSectionInAllTablesFromSaved(sectionData) {
     });
 }
 
-function createSectionInAllTables(name, styleString) {
+function createSectionInAllTables(name, styleString, showTotal) {
     const sectionId = 'section-' + Date.now();
 
-    // Create for input table
-    createSectionRow('createListManual', sectionId, name, styleString);
-    // Create for regular bill table
-    createSectionRow('copyListManual', sectionId, name, styleString);
-    // Create for GST bill table
-    createSectionRow('gstCopyListManual', sectionId, name, styleString);
+    // Create for input table (Pass showTotal)
+    createSectionRow('createListManual', sectionId, name, styleString, showTotal);
+    // Create for regular bill table (Pass showTotal)
+    createSectionRow('copyListManual', sectionId, name, styleString, showTotal);
+    // Create for GST bill table (Pass showTotal)
+    createSectionRow('gstCopyListManual', sectionId, name, styleString, showTotal);
 }
 // And update the createSectionRow function to include stopPropagation:
-function createSectionRow(tableId, sectionId, name, styleString) {
+function createSectionRow(tableId, sectionId, name, styleString, showTotal = false) {
     const table = document.getElementById(tableId);
     if (!table) return;
 
@@ -9783,6 +9890,8 @@ function createSectionRow(tableId, sectionId, name, styleString) {
     const tr = document.createElement('tr');
     tr.className = 'section-row';
     tr.setAttribute('data-section-id', sectionId);
+    // FIX: Actually set the attribute on creation so totals work immediately
+    tr.setAttribute('data-show-total', showTotal); 
     tr.setAttribute('draggable', 'true');
 
     const colspan = tableId === 'gstCopyListManual' ? '8' : '7';
@@ -9811,12 +9920,15 @@ function createSectionRow(tableId, sectionId, name, styleString) {
 }
 
 
-function updateSectionInAllTables(sectionId, name, styleString) {
+function updateSectionInAllTables(sectionId, name, styleString, showTotal) { // NEW argument
     const tables = ['createListManual', 'copyListManual', 'gstCopyListManual'];
     tables.forEach(tableId => {
         const row = document.querySelector(`#${tableId} tr[data-section-id="${sectionId}"]`);
         if (row) {
             const colspan = tableId === 'gstCopyListManual' ? '8' : '7';
+
+            // NEW: Update attribute
+            row.setAttribute('data-show-total', showTotal);
 
             // FIX: Only show buttons in input table (createListManual)
             let content = name;
@@ -13048,3 +13160,436 @@ function updateBrandingUI() {
 
 // Add this to your DOMContentLoaded event listener
 // await loadBrandingSettings();
+
+/* ==========================================
+   UNIFIED ADJUSTMENT SYSTEM (SEQUENTIAL CHAIN)
+   ========================================== */
+
+function openAdjustmentModal() {
+    // === FIX 2: Explicitly close sidebar instead of toggling ===
+    const sidebar = document.getElementById("settings-sidebar");
+    const overlay = document.getElementById("settings-overlay");
+    if (sidebar) sidebar.classList.remove("open");
+    if (overlay) overlay.classList.remove("open");
+
+    document.getElementById('adjustment-modal').style.display = 'block';
+    renderAdjustmentTables(getCurrentSubtotal());
+    resetAdjForm();
+}
+
+function closeAdjustmentModal() {
+    document.getElementById('adjustment-modal').style.display = 'none';
+}
+
+// Core Logic: The Chain Calculator (Handles Regular & GST Modes)
+// Core Logic: The Chain Calculator (Handles Regular & GST Modes)
+function calculateAdjustments(subtotal) {
+    let runningBalance = subtotal;
+    let mainBillRows = '';
+    let modalPreviewRows = '';
+
+    // --- 1. PREPARE CHAINS ---
+    // If GST Mode: Filter out "Legacy GST" (Tax is calc'd at end)
+    const activeChain = isGSTMode
+        ? adjustmentChain.filter(a => a.id !== 'legacy-gst')
+        : adjustmentChain;
+
+    // --- 2. GENERATE FIXED SUBTOTAL ROW FOR MODAL (Common) ---
+    const fixedSubRow = `
+        <tr style="background-color: #f8f9fa; font-weight: bold;">
+            <td>SUB TOTAL</td>
+            <td>${subtotal.toFixed(2)}</td>
+            <td>-</td>
+            <td>-</td>
+            <td>${subtotal.toFixed(2)}</td>
+            <td></td>
+        </tr>`;
+
+    modalPreviewRows += fixedSubRow;
+
+    // --- 3. CALCULATE ADJUSTMENTS CHAIN ---
+    activeChain.forEach((adj, index) => {
+        let adjAmount = 0;
+        let sourceAmount = runningBalance;
+
+        if (adj.type === 'percent') {
+            adjAmount = (sourceAmount * adj.value) / 100;
+        } else {
+            adjAmount = adj.value;
+        }
+        adjAmount = parseFloat(adjAmount.toFixed(2));
+
+        // === FIX 1: Regular Mode "Taxable Amount" in Modal ===
+        // Auto-Insert if Tax is applied after other adjustments
+        if ((adj.name.toLowerCase().includes('gst') || adj.name.toLowerCase().includes('tax')) &&
+            !isGSTMode &&
+            Math.abs(runningBalance - subtotal) > 0.01) {
+
+            // Add to Main Bill
+            mainBillRows += `
+                <tr class="taxable-row">
+                    <td colspan="5" style="text-align: right;">Taxable Amount</td>
+                    <td style="text-align: center;">${runningBalance.toFixed(2)}</td>
+                </tr>`;
+
+            // Add to Modal Preview (Fixed Row)
+            modalPreviewRows += `
+                <tr style="background-color: #e8f5e9; font-weight: bold; color: #666;">
+                    <td>Taxable Amount</td>
+                    <td>${runningBalance.toFixed(2)}</td>
+                    <td>-</td>
+                    <td>-</td>
+                    <td>${runningBalance.toFixed(2)}</td>
+                    <td></td>
+                </tr>`;
+        }
+
+        // Apply Operation
+        if (adj.operation === 'subtract') {
+            runningBalance -= adjAmount;
+        } else {
+            runningBalance += adjAmount;
+        }
+
+        const sign = adj.operation === 'subtract' ? '-' : '';
+        const colorStyle = adj.textColor ? `color: ${adj.textColor};` : '';
+
+        // --- GENERATE HTML ---
+
+        // A. Main Bill Table Row
+        mainBillRows += `
+            <tr data-adj-id="${adj.id}">
+                <td ${isGSTMode ? '' : 'colspan="5" style="text-align: right;"'}>
+                    ${adj.name} ${adj.type === 'percent' ? `(${adj.value}%)` : ''}
+                </td>
+                <td style="text-align: right; ${colorStyle}">${sign}${adjAmount.toFixed(2)}</td>
+            </tr>`;
+
+        // B. Modal Preview Row
+        const realIndex = adjustmentChain.findIndex(a => a.id === adj.id);
+
+        modalPreviewRows += `
+            <tr class="adj-row" draggable="true" data-index="${realIndex}" data-id="${adj.id}">
+                <td>${adj.name}</td>
+                <td>${sourceAmount.toFixed(2)}</td>
+                <td>${adj.type === 'percent' ? adj.value + '%' : '-'}</td>
+                <td style="color:${adj.operation === 'subtract' ? 'red' : 'green'}">
+                    ${sign}${adjAmount.toFixed(2)}
+                </td>
+                <td style="font-weight:bold">${runningBalance.toFixed(2)}</td>
+                <td>
+                    <button class="adj-action-btn edit" onclick="editAdjustment('${adj.id}')">
+                        <i class="material-icons" style="font-size:16px">edit</i>
+                    </button>
+                    <button class="adj-action-btn remove" onclick="removeAdjustment('${adj.id}')">
+                        <i class="material-icons" style="font-size:16px">close</i>
+                    </button>
+                </td>
+            </tr>`;
+    });
+
+    // --- 4. FINAL CALCULATIONS & DISPLAY ---
+
+    if (isGSTMode) {
+        // === GST MODE LOGIC ===
+        const taxableValue = runningBalance;
+        let cgstAmount = 0, sgstAmount = 0, igstAmount = 0;
+
+        // Calculate Taxes
+        if (typeof transactionType !== 'undefined' && transactionType === 'intrastate') {
+            cgstAmount = parseFloat(((taxableValue * (currentGSTPercent / 2)) / 100).toFixed(2));
+            sgstAmount = parseFloat(((taxableValue * (currentGSTPercent / 2)) / 100).toFixed(2));
+        } else {
+            igstAmount = parseFloat(((taxableValue * currentGSTPercent) / 100).toFixed(2));
+        }
+
+        const grandTotal = Math.round(taxableValue + cgstAmount + sgstAmount + igstAmount);
+
+        const showTaxableRow = activeChain.length > 0;
+
+        // === FIX 2: Add Tax Breakdown Rows to Modal Preview ===
+        const taxRows = `
+            <tr style="background-color: #e8f5e9; font-weight: bold; display: ${showTaxableRow ? '' : 'none'};">
+                <td>TAXABLE AMT</td>
+                <td>${taxableValue.toFixed(2)}</td>
+                <td>-</td>
+                <td>-</td>
+                <td>${taxableValue.toFixed(2)}</td>
+                <td></td>
+            </tr>
+            ${transactionType === 'intrastate' ? `
+            <tr style="font-weight: bold; color: #666;">
+                <td>CGST</td>
+                <td>${taxableValue.toFixed(2)}</td>
+                <td>${(currentGSTPercent / 2)}%</td>
+                <td style="color:green">+${cgstAmount.toFixed(2)}</td>
+                <td>-</td>
+                <td></td>
+            </tr>
+            <tr style="font-weight: bold; color: #666;">
+                <td>SGST</td>
+                <td>${taxableValue.toFixed(2)}</td>
+                <td>${(currentGSTPercent / 2)}%</td>
+                <td style="color:green">+${sgstAmount.toFixed(2)}</td>
+                <td>-</td>
+                <td></td>
+            </tr>` : `
+            <tr style="font-weight: bold; color: #666;">
+                <td>IGST</td>
+                <td>${taxableValue.toFixed(2)}</td>
+                <td>${currentGSTPercent}%</td>
+                <td style="color:green">+${igstAmount.toFixed(2)}</td>
+                <td>-</td>
+                <td></td>
+            </tr>`}
+            <tr style="background-color: #2c3e50; color: white; font-weight: bold;">
+                <td>GRAND TOTAL</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>${grandTotal.toFixed(2)}</td>
+                <td></td>
+            </tr>`;
+
+        modalPreviewRows += taxRows;
+
+        // Update GST Bill Table
+        const gstBillHtml = `
+            <tr>
+                <td>Sub Total</td>
+                <td id="gst-sub-total">${subtotal.toFixed(2)}</td>
+            </tr>
+            ${mainBillRows}
+            <tr style="font-weight:bold; background-color:#f8f9fa; display: ${showTaxableRow ? '' : 'none'};">
+                <td>TAXABLE AMT</td>
+                <td id="gst-taxable-amount">${taxableValue.toFixed(2)}</td>
+            </tr>
+            <tr style="${transactionType === 'intrastate' ? '' : 'display:none'}">
+                <td>CGST</td>
+                <td id="gst-cgst-amount">${cgstAmount.toFixed(2)}</td>
+            </tr>
+            <tr style="${transactionType === 'intrastate' ? '' : 'display:none'}">
+                <td>SGST</td>
+                <td id="gst-sgst-amount">${sgstAmount.toFixed(2)}</td>
+            </tr>
+            <tr style="${transactionType === 'interstate' ? '' : 'display:none'}">
+                <td>IGST</td>
+                <td id="gst-igst-amount">${igstAmount.toFixed(2)}</td>
+            </tr>
+            <tr>
+                <td><strong>Grand Total</strong></td>
+                <td><strong id="gst-grand-total">${grandTotal.toFixed(2)}</strong></td>
+            </tr>`;
+
+        const gstTbody = document.querySelector('#gst-bill-totals-table tbody');
+        if (gstTbody) gstTbody.innerHTML = gstBillHtml;
+
+        updateTaxBreakdownTable({}, taxableValue, cgstAmount, sgstAmount, igstAmount);
+
+        const inputTotal = document.getElementById('createTotalAmountManual');
+        if (inputTotal) inputTotal.textContent = subtotal.toFixed(2);
+
+        updateAmountInWords(grandTotal);
+
+    } else {
+        // === REGULAR MODE LOGIC ===
+        const grandTotal = runningBalance;
+
+        // Modal Fixed Row (Regular)
+        const finalRow = `
+            <tr style="background-color: #2c3e50; color: white; font-weight: bold;">
+                <td>GRAND TOTAL</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>${grandTotal.toFixed(2)}</td>
+                <td></td>
+            </tr>`;
+        modalPreviewRows += finalRow;
+
+        // Update Regular Bill Table
+        let regBillHtml = '';
+
+        if (activeChain.length > 0) {
+            regBillHtml = `
+                <tr>
+                    <td colspan="5" class="total-cell" style="text-align: right;">SUB TOTAL</td>
+                    <td class="total-cell" style="text-align: center;">${subtotal.toFixed(2)}</td>
+                </tr>
+                ${mainBillRows}
+                <tr>
+                    <td colspan="5" class="total-cell" style="text-align: right;">GRAND TOTAL</td>
+                    <td class="total-cell" style="text-align: center;">${grandTotal.toFixed(2)}</td>
+                </tr>`;
+        } else {
+            regBillHtml = `
+                <tr>
+                    <td colspan="5" class="total-cell" style="text-align: right;">TOTAL</td>
+                    <td class="total-cell" style="text-align: center;">${grandTotal.toFixed(2)}</td>
+                </tr>`;
+        }
+
+        const regTbody = document.getElementById('bill-total-tbody');
+        if (regTbody) regTbody.innerHTML = regBillHtml;
+
+        // Update Input Mode Total
+        const inputTotal = document.getElementById('createTotalAmountManual');
+        if (inputTotal) inputTotal.textContent = subtotal.toFixed(2);
+
+        const copyTotal = document.getElementById('copyTotalAmount');
+        if (copyTotal) copyTotal.textContent = grandTotal.toFixed(2);
+
+        updateAmountInWords(grandTotal);
+    }
+
+    // --- 5. UPDATE MODAL PREVIEW DOM ---
+    const previewBody = document.getElementById('adj-preview-tbody');
+    if (previewBody) {
+        previewBody.innerHTML = modalPreviewRows;
+        addAdjDragListeners();
+    }
+}
+
+// Helper: Get raw item total
+function getCurrentSubtotal() {
+    const items = document.querySelectorAll('#createListManual tbody tr[data-id]');
+    let subtotal = 0;
+    items.forEach(row => {
+        const amount = parseFloat(row.getAttribute('data-amount')) || 0;
+        subtotal += amount;
+    });
+    return parseFloat(subtotal.toFixed(2)); // Fixed precision issues
+}
+
+// CRUD: Add/Edit/Remove
+async function saveAdjustment() {
+    const id = document.getElementById('adj-id').value || 'adj-' + Date.now();
+    const name = document.getElementById('adj-name').value.trim();
+    const type = document.getElementById('adj-type').value;
+    const value = parseFloat(document.getElementById('adj-value').value);
+    const operation = document.getElementById('adj-operation').value;
+    const color = document.getElementById('adj-color').value;
+
+    if (!name || isNaN(value)) {
+        showNotification('Please enter valid details', 'error');
+        return;
+    }
+
+    const newAdj = { id, name, type, value, operation, textColor: color };
+
+    const existingIndex = adjustmentChain.findIndex(a => a.id === id);
+    if (existingIndex >= 0) {
+        adjustmentChain[existingIndex] = newAdj;
+    } else {
+        adjustmentChain.push(newAdj);
+    }
+
+    updateTotal();
+    openAdjustmentModal();
+    resetAdjForm();
+
+    // === FIX 3: Persist data immediately ===
+    await saveToLocalStorage();
+    saveStateToHistory();
+}
+
+function editAdjustment(id) {
+    const adj = adjustmentChain.find(a => a.id === id);
+    if (!adj) return;
+
+    document.getElementById('adj-id').value = adj.id;
+    document.getElementById('adj-name').value = adj.name;
+    document.getElementById('adj-type').value = adj.type;
+    document.getElementById('adj-value').value = adj.value;
+    document.getElementById('adj-operation').value = adj.operation;
+    document.getElementById('adj-color').value = adj.textColor;
+    document.getElementById('btn-save-adj').textContent = 'Update';
+}
+
+// [REPLACE EXISTING removeAdjustment FUNCTION]
+async function removeAdjustment(id) {
+    // Use custom confirmation dialog
+    const shouldRemove = await showConfirm('Are you sure you want to remove this adjustment?');
+
+    if (shouldRemove) {
+        adjustmentChain = adjustmentChain.filter(a => a.id !== id);
+
+        // Update UI
+        updateTotal();
+        renderAdjustmentTables(getCurrentSubtotal());
+
+        // Persist data
+        await saveToLocalStorage();
+        saveStateToHistory();
+
+        showNotification('Adjustment removed successfully', 'success');
+    }
+}
+
+function resetAdjForm() {
+    document.getElementById('adj-id').value = '';
+    document.getElementById('adj-name').value = '';
+    document.getElementById('adj-value').value = '';
+    document.getElementById('btn-save-adj').textContent = 'Add';
+}
+
+function renderAdjustmentTables(subtotal) {
+    calculateAdjustments(subtotal); // Re-runs calculation and updates DOM
+}
+
+/* ==========================================
+   UNIQUE DRAG & DROP FOR ADJUSTMENTS
+   ========================================== */
+function addAdjDragListeners() {
+    const rows = document.querySelectorAll('.adj-row');
+    rows.forEach(row => {
+        row.addEventListener('dragstart', handleAdjDragStart);
+        row.addEventListener('dragover', handleAdjDragOver);
+        row.addEventListener('drop', handleAdjDrop);
+        row.addEventListener('dragend', handleAdjDragEnd);
+    });
+}
+
+function handleAdjDragStart(e) {
+    adjDragSrcEl = this;
+    e.dataTransfer.effectAllowed = 'move';
+    this.classList.add('adj-dragging');
+}
+
+function handleAdjDragOver(e) {
+    if (e.preventDefault) e.preventDefault();
+    if (!adjDragSrcEl) return;
+
+    const targetRow = e.target.closest('tr');
+    if (targetRow && targetRow !== adjDragSrcEl) {
+        targetRow.classList.add('adj-drag-over');
+    }
+    return false;
+}
+
+async function handleAdjDrop(e) {
+    if (e.stopPropagation) e.stopPropagation();
+    if (adjDragSrcEl === this) return false;
+
+    const srcIdx = parseInt(adjDragSrcEl.getAttribute('data-index'));
+    const destIdx = parseInt(this.getAttribute('data-index'));
+
+    const itemToMove = adjustmentChain[srcIdx];
+    adjustmentChain.splice(srcIdx, 1);
+    adjustmentChain.splice(destIdx, 0, itemToMove);
+
+    updateTotal();
+    renderAdjustmentTables(getCurrentSubtotal());
+
+    // === FIX 3: Persist data immediately ===
+    await saveToLocalStorage();
+    saveStateToHistory();
+
+    return false;
+}
+
+function handleAdjDragEnd() {
+    this.classList.remove('adj-dragging');
+    document.querySelectorAll('.adj-row').forEach(row => row.classList.remove('adj-drag-over'));
+    adjDragSrcEl = null;
+}
