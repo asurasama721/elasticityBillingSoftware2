@@ -3106,7 +3106,8 @@ async function loadSavedBill(billId) {
         if (currentView === 'bill') {
             toggleView();
         }
-
+        // FIX: Reset columns to visible on load
+        resetColumnVisibility();
         // Don't set edit mode on regular load
     } catch (error) {
         console.error('Error loading saved bill:', error);
@@ -4072,7 +4073,7 @@ function createGSTTableRowManual(id, itemName, quantity, unit, rate, amount, not
     <td>${unit}</td>
     <td>${numericRate.toFixed(2)}</td>
     <td class="amount">${numericAmount.toFixed(2)}</td>
-    <td><button onclick="${removeFn}" class="remove-btn"><span class="material-icons">close</span></button></td>
+    
 `;
 
     tr.setAttribute('data-dimension-type', dimensionType);
@@ -5653,7 +5654,9 @@ async function loadFromHistory(item) {
         saveStateToHistory();
         initializeDragAndDrop();
         closeHistoryModal();
-        updateColumnVisibility();
+        // updateColumnVisibility();
+        // FIX: Reset columns to visible on load
+        resetColumnVisibility();
 
         console.log('Bill restored successfully from history');
     } else {
@@ -6653,6 +6656,7 @@ function toggleBillsMode() {
     }
 }
 
+//NO LOGNER USED updateColumnVisibility
 // NEW FUNCTION: Update column visibility based on current view
 function updateColumnVisibility() {
     if (currentView === 'bill') {
@@ -6726,8 +6730,9 @@ function toggleView() {
             hideTableColumn(document.getElementById("copyListManual"), 6, "table-cell");
         }
     }
-
-    updateColumnVisibility();
+    // FIX: Recalculate column widths and total row colspan immediately
+    applyColumnVisibility();
+    // updateColumnVisibility();
 }
 
 // SIMPLE DRAG & DROP - Unified for all rows
@@ -6799,10 +6804,10 @@ function handleDrop(e) {
 
         updateSerialNumbers();
         updateTotal();
-        
+
         // FIX: Recalculate section totals immediately after drop
         // This ensures total rows appear/move correctly when sections/items are reordered
-        updateSectionTotals(); 
+        updateSectionTotals();
 
         saveToLocalStorage();
         saveStateToHistory();
@@ -7301,19 +7306,26 @@ async function toggleGSTMode() {
         isGSTMode = enableGST;
         await setInDB('gstMode', 'isGSTMode', isGSTMode);
 
+        // FIX: Reset all columns to visible when switching TO GST Mode
+        if (isGSTMode) {
+            const columnIds = ['colSrNo', 'colQty', 'colUnit', 'colRate', 'colAmt', 'colTotal'];
+            columnIds.forEach(id => {
+                const checkbox = document.getElementById(id);
+                if (checkbox) checkbox.checked = true;
+            });
+            // Apply these changes immediately
+            applyColumnVisibility();
+        }
+
         updateUIForGSTMode();
         closeGSTModeModal();
 
-        // === FIX: Force Recalculate Totals & Adjustments after Mode Switch ===
-        // This ensures the table rebuilds with the correct structure (Regular vs GST)
-        // and applies the adjustment chain immediately.
+        // Force Recalculate Totals & Adjustments after Mode Switch
         setTimeout(() => {
             updateTotal();
-            // Also ensure GSTIN visibility is correct for the new mode
             updateGSTINVisibility();
         }, 100);
 
-        // Show appropriate message
         if (isGSTMode) {
             console.log('GST Mode Enabled. Please set up your company information and customer details.');
         } else {
@@ -8674,7 +8686,9 @@ async function loadGSTSavedBillsList() {
                     setTimeout(() => {
                         copyItemsToGSTBill();
                         updateGSTTaxCalculation();
-                        updateGSTBillDisplay();
+                        // updateGSTBillDisplay();
+                        // FIX: Reset columns after loading is complete
+                        resetColumnVisibility();
                     }, 100);
                 }
             });
@@ -8993,7 +9007,7 @@ function copyItemsToGSTBill() {
 
             const cells = regularRow.children;
             const particularsDiv = cells[1];
-            
+
             // Get HSN from saved item if available
             let hsnCode = regularRow.getAttribute('data-hsn') || '';
 
@@ -9031,7 +9045,7 @@ function copyItemsToGSTBill() {
 
     // Update GST calculations after copying items
     updateGSTTaxCalculation();
-    
+
     // FIX: Explicitly call updateSectionTotals here to ensure they appear immediately
     updateSectionTotals();
 }
@@ -9480,6 +9494,8 @@ function updateSectionTotals() {
                 // Add empty cell for Actions column if needed
                 if (tableId === 'createListManual' || tableId === 'gstCopyListManual') {
                     const emptyCell = document.createElement('td');
+                    // FIX: Add class to target this cell for visibility toggling
+                    emptyCell.className = 'section-total-action-cell'; 
                     totalRow.appendChild(emptyCell);
                 }
 
@@ -9495,7 +9511,7 @@ function updateSectionTotals() {
                 // Start new section
                 currentSectionId = row.getAttribute('data-section-id');
                 
-                // FIX: Safely get text node only (ignoring buttons like '-', 'close')
+                // Safely get text node only (ignoring buttons)
                 const td = row.querySelector('td');
                 currentSectionName = '';
                 if (td) {
@@ -9506,7 +9522,6 @@ function updateSectionTotals() {
                         }
                     }
                 }
-                // Fallback if no text node found
                 if (!currentSectionName) currentSectionName = 'Section';
 
                 showTotalForCurrent = row.getAttribute('data-show-total') === 'true';
@@ -9768,9 +9783,9 @@ function saveSection() {
     const textTransform = document.getElementById('section-text-transform').value;
     const paddingType = document.getElementById('section-padding-type').value;
     const paddingValue = document.getElementById('section-padding-value').value;
-    
+
     // FIX: Capture the checkbox state
-    const showTotal = document.getElementById('section-show-total').checked; 
+    const showTotal = document.getElementById('section-show-total').checked;
 
     let paddingStyle = '';
     if (paddingType && paddingValue) {
@@ -9824,9 +9839,9 @@ function saveSection() {
     closeSectionModal();
     saveToLocalStorage();
     saveStateToHistory();
-    
+
     // FIX: Recalculate totals immediately after saving
-    updateSectionTotals(); 
+    updateSectionTotals();
 }
 
 function createSectionInAllTablesFromSaved(sectionData) {
@@ -9891,7 +9906,7 @@ function createSectionRow(tableId, sectionId, name, styleString, showTotal = fal
     tr.className = 'section-row';
     tr.setAttribute('data-section-id', sectionId);
     // FIX: Actually set the attribute on creation so totals work immediately
-    tr.setAttribute('data-show-total', showTotal); 
+    tr.setAttribute('data-show-total', showTotal);
     tr.setAttribute('draggable', 'true');
 
     const colspan = tableId === 'gstCopyListManual' ? '8' : '7';
@@ -11632,6 +11647,16 @@ function closeColumnDialog() {
     document.getElementById('columnDialog').style.display = 'none';
 }
 
+function resetColumnVisibility() {
+    const columnIds = ['colSrNo', 'colQty', 'colUnit', 'colRate', 'colAmt', 'colTotal'];
+    columnIds.forEach(id => {
+        const checkbox = document.getElementById(id);
+        if (checkbox) checkbox.checked = true;
+    });
+    // Apply changes immediately
+    applyColumnVisibility();
+}
+
 function applyColumnVisibility() {
     const columns = {
         'colSrNo': 0,  // Column index for SR NO
@@ -11660,6 +11685,9 @@ function applyColumnVisibility() {
         }
     }
 
+    // Check if Amount column is visible
+    const isAmtVisible = document.getElementById('colAmt').checked;
+
     // Hide/show table columns based on checkboxes for BOTH tables
     for (const [checkboxId, columnIndex] of Object.entries(columns)) {
         const isVisible = document.getElementById(checkboxId).checked;
@@ -11684,8 +11712,8 @@ function applyColumnVisibility() {
                     // Hide cells in tbody (skip Actions column for input table)
                     const rows = table.querySelectorAll('tbody tr');
                     rows.forEach(row => {
-                        // Skip section rows when hiding regular columns
-                        if (!row.classList.contains('section-row')) {
+                        // Skip section rows and total rows when hiding regular columns
+                        if (!row.classList.contains('section-row') && !row.classList.contains('section-total-row')) {
                             const cells = row.querySelectorAll('td');
                             if (cells[columnIndex] && columnIndex !== 6) { // Skip Actions column
                                 cells[columnIndex].style.display = isVisible ? '' : 'none';
@@ -11696,27 +11724,18 @@ function applyColumnVisibility() {
             });
         }
     }
+    
     // Add padding to Particulars column when SR NO is hidden
     const srNoHidden = !document.getElementById('colSrNo').checked;
-    const particularsHeaders = document.querySelectorAll('thead th:nth-child(2)'); // Particulars header
-    const particularsCells = document.querySelectorAll('tbody td:nth-child(2)'); // Particulars cells
+    const particularsHeaders = document.querySelectorAll('thead th:nth-child(2)');
+    const particularsCells = document.querySelectorAll('tbody td:nth-child(2)');
 
     if (srNoHidden) {
-        // Add padding when SR NO is hidden
-        particularsHeaders.forEach(header => {
-            header.style.paddingLeft = '25px';
-        });
-        particularsCells.forEach(cell => {
-            cell.style.paddingLeft = '25px';
-        });
+        particularsHeaders.forEach(header => header.style.paddingLeft = '25px');
+        particularsCells.forEach(cell => cell.style.paddingLeft = '25px');
     } else {
-        // Remove padding when SR NO is visible
-        particularsHeaders.forEach(header => {
-            header.style.paddingLeft = '';
-        });
-        particularsCells.forEach(cell => {
-            cell.style.paddingLeft = '';
-        });
+        particularsHeaders.forEach(header => header.style.paddingLeft = '');
+        particularsCells.forEach(cell => cell.style.paddingLeft = '');
     }
 
     // Update section row colspan to match visible column count
@@ -11725,6 +11744,71 @@ function applyColumnVisibility() {
         row.querySelector('td').colSpan = visibleColumnCount;
     });
 
+    // FIX: Update Section Total Rows visibility and colspan
+    const sectionTotalRows = document.querySelectorAll('.section-total-row');
+    sectionTotalRows.forEach(row => {
+        // 1. Hide entire row if Amount column is hidden
+        if (!isAmtVisible) {
+            row.style.display = 'none';
+        } else {
+            row.style.display = ''; // Reset display to default (table-row)
+
+            // 2. If visible, calculate colspan
+            const cells = row.children;
+            if (cells.length > 0) {
+                const table = row.closest('table');
+                let adjustment = 1; // Default: subtract Amount column
+
+                // Handle the visibility of the extra Action cell
+                const actionCell = row.querySelector('.section-total-action-cell');
+                if (actionCell) {
+                    // Determine if Actions column is hidden in this table
+                    let isActionColHidden = false;
+                    let actionHeaderIndex = 6; // Default for input table (createListManual)
+                    
+                    if (table.id === 'gstCopyListManual') actionHeaderIndex = 7;
+                    
+                    const actionHeader = table.querySelector(`thead th:nth-child(${actionHeaderIndex + 1})`);
+                    // If header exists and is hidden, OR header doesn't exist (some views), hide cell
+                    if (actionHeader && actionHeader.style.display === 'none') {
+                        isActionColHidden = true;
+                    } else if (!actionHeader) {
+                        // Fallback for tables where action header might be missing/removed in DOM
+                        isActionColHidden = true; 
+                    }
+
+                    if (isActionColHidden) {
+                        actionCell.style.display = 'none';
+                    } else {
+                        actionCell.style.display = 'table-cell';
+                        // If action cell is visible, we subtract Amount + Action from colspan
+                    }
+                }
+
+                // If table has actions column visible (like createListManual or GST view)
+                if (table.id === 'createListManual' || table.id === 'gstCopyListManual') {
+                    // Check if the row actually HAS an action cell AND it is visible
+                    if (cells.length > 2 && actionCell && actionCell.style.display !== 'none') {
+                        adjustment = 2; // Subtract Amount + Action
+                    }
+                } else {
+                    // Regular preview table logic (copyListManual)
+                    let visibleDataCols = 0;
+                    for (let i = 0; i <= 4; i++) { // Check cols 0 to 4
+                        const header = table.querySelector(`thead th:nth-child(${i + 1})`);
+                        if (header && header.style.display !== 'none') {
+                            visibleDataCols++;
+                        }
+                    }
+                    cells[0].colSpan = visibleDataCols;
+                    return;
+                }
+
+                const newColSpan = Math.max(1, visibleColumnCount - adjustment);
+                cells[0].colSpan = newColSpan;
+            }
+        }
+    });
 
     closeColumnDialog();
 }
