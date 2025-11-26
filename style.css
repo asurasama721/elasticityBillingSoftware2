@@ -1591,6 +1591,14 @@ input:checked+.toggle-slider:before {
     text-align: left;
 }
 
+/* In style.css, add these styles */
+.section-total-row td {
+    background-color: #f8f8f8; /* Very light variant of the section color */
+    border-top: 1px dashed #aaa !important;
+    border-bottom: 2px solid #ddd !important;
+    color: #333;
+}
+
 .collapse-btn {
     color: #000;
     background: inherit;
@@ -2752,11 +2760,14 @@ tr[data-id] .dimensions span[style*="color: red"] {
     border: 1px solid #999;
     padding: 8px;
     vertical-align: top;
+    text-align: center
+    ;
 }
 
 .unified-ledger-table th {
     background: var(--primary-color);
     text-align: center;
+    color: white;
 }
 
 .unified-ledger-table .bold {
@@ -3054,3 +3065,98 @@ terms modal
     border: 1px solid var(--secondary-color);
     background-color: #f0f0f0;
 }
+
+/* [ADD TO END OF FILE] */
+
+/* Adjustment Drag & Drop Styles */
+.adj-row {
+    cursor: grab;
+    transition: background-color 0.2s;
+}
+
+.adj-row:active {
+    cursor: grabbing;
+}
+
+.adj-dragging {
+    opacity: 0.5;
+    background-color: #e3f2fd;
+    border: 2px dashed #3498db;
+}
+
+.adj-drag-over {
+    border-top: 2px solid #3498db !important;
+}
+
+/* Visual Taxable Row Style */
+.taxable-row td {
+    background-color: #fcf8e3; /* Light yellow */
+    color: #8a6d3b;
+    font-size: 0.9em;
+    font-style: italic;
+    border-top: 1px dashed #faebcc;
+    border-bottom: 1px dashed #faebcc;
+}
+
+/* Modal Table Actions */
+.adj-action-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px 5px;
+    color: #666;
+}
+.adj-action-btn:hover { color: #333; }
+.adj-action-btn.edit { color: #f39c12; }
+.adj-action-btn.remove { color: #e74c3c; }
+
+
+/* [ADD TO END OF style.css] */
+
+/* [ADD TO END OF style.css] */
+
+/* Fix Regular Bill Total Table Alignment */
+#bill-total-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+
+#bill-total-table td {
+    padding: 5px 10px !important; /* Overrides the 15px global padding */
+    border: none !important;      /* specific clean look for totals */
+}
+
+/* Force Right Alignment for the Label Column (Sub Total, Discount, etc.) */
+#bill-total-table td[colspan="5"] {
+    text-align: right !important;
+    padding-right: 20px !important; /* Add spacing between label and amount */
+}
+
+/* Force Alignment for the Amount Column */
+#bill-total-table td:last-child {
+    text-align: center !important; /* Enforce center as per your HTML structure */
+    width: 20% !important;
+    white-space: nowrap;
+}
+
+/* Ensure Total Cells (Subtotal/Grand Total) stay bold */
+#bill-total-table .total-cell {
+    font-weight: bold;
+    background-color: var(--total-bg);
+}
+
+
+/* [ADD TO END OF style.css] */
+
+/* Fix width for Adjustment Modal Inputs */
+#adjustment-modal .form-row .form-group {
+    margin-bottom: 0; /* Let the row gap handle spacing */
+}
+
+#adjustment-modal select, 
+#adjustment-modal input[type="number"], 
+#adjustment-modal input[type="text"] {
+    height: 38px; /* Consistent height for alignment */
+}
+
