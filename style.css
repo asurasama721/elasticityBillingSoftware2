@@ -3202,3 +3202,115 @@ terms modal
         zoom: 0.6; /* 60% scale */
     }
 }
+
+
+/* ============================================================
+   FINAL ROBUST PRINT STYLES (Fixes Row Splitting)
+   ============================================================ */
+@media print {
+    /* 1. Page Setup */
+    @page {
+        margin: 10mm;
+        size: A4 portrait;
+    }
+
+    body {
+        margin: 0;
+        padding: 0;
+        background: white !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    /* 2. Container Handling */
+    #main-container,
+    #bill-container, 
+    #gst-bill-container,
+    .list-of-items {
+        display: block !important;
+        width: 100% !important;
+        height: auto !important;
+        overflow: visible !important;
+        /* Allow container to break */
+        page-break-inside: auto !important;
+        break-inside: auto !important;
+    }
+
+    /* 3. Table Handling */
+    table {
+        width: 100% !important;
+        border-collapse: collapse;
+        page-break-inside: auto !important;
+        break-inside: auto !important;
+    }
+
+    tbody {
+        page-break-inside: auto !important;
+    }
+
+    /* 4. Row Handling - THE CRITICAL FIX */
+    tr {
+        /* Force row to stay together */
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        
+        /* Ensure browser treats it as an atomic block */
+        display: table-row !important; 
+    }
+
+    /* Add buffer to cells to prevent tight cuts */
+    td, th {
+        padding-top: 4px !important;
+        padding-bottom: 4px !important;
+        page-break-inside: avoid !important;
+    }
+
+    /* 5. Header & Footer Repeating */
+    thead {
+        display: table-header-group !important;
+    }
+
+    tfoot {
+        display: table-footer-group !important;
+    }
+
+    /* 6. Bill Footer Section (Bank details etc) */
+    .bill-footer {
+        page-break-inside: avoid !important; /* Try to keep footer together */
+        break-inside: avoid !important;
+        width: 100% !important;
+        margin-top: 20px !important;
+        display: table !important; /* Ensure it behaves like a table for breaking */
+    }
+
+    /* 7. Hide UI Elements */
+    #tools, 
+    #settings-sidebar, 
+    #settings-overlay, 
+    #manual-item-container, 
+    .modal, 
+    .notification-container,
+    #reg-footer-btn,
+    .add-payment-form, 
+    .payment-dialog,
+    .ledger-dialog {
+        display: none !important;
+    }
+
+    /* 8. Visibility Logic */
+    #gst-bill-container { display: none !important; }
+    #bill-container { display: block !important; }
+
+    body.gst-mode #bill-container { display: none !important; }
+    body.gst-mode #gst-bill-container { display: block !important; }
+
+
+
+    /* 9. Input Styling */
+    input {
+        border: none !important;
+        background: transparent !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+}
