@@ -4303,6 +4303,8 @@ function toggleRegularFooter() {
         // Also update amount in words immediately
         updateTotal();
     }
+
+    applyColumnVisibility();
 }
 
 function updateRegularFooterInfo() {
@@ -6925,96 +6927,83 @@ function initializeDragAndDrop() {
     });
 }
 
-// Enhanced PDF download with better page breaks
-function downloadPDF() {
-    saveToLocalStorage();
+async function downloadPDF() {
+    // 1. Save data
+    await saveToLocalStorage();
 
-    let billContainer, containerToDownload;
-    const originalDisplay = {};
-
-    if (isGSTMode) {
-        // GST Mode: Use GST bill container
-        billContainer = document.getElementById("gst-bill-container");
-        containerToDownload = billContainer;
-
-        // Store original display state
-        originalDisplay.gstBill = billContainer.style.display;
-        originalDisplay.regularBill = document.getElementById("bill-container").style.display;
-        originalDisplay.manual = document.getElementById("manual-item-container").style.display;
-
-        // Show GST bill and hide others
-        billContainer.style.display = "block";
-        document.getElementById("bill-container").style.display = "none";
-        document.getElementById("manual-item-container").style.display = "none";
-
-        // Hide columns for GST bill
-        hideTableColumn(document.getElementById("gstCopyListManual"), 8, "none");
-        hideTableColumn(document.getElementById("gstCopyListManual"), 7, "none");
-    } else {
-        // Regular Mode: Use regular bill container
-        billContainer = document.getElementById("bill-container");
-        containerToDownload = billContainer;
-
-        // Store original display state
-        originalDisplay.regularBill = billContainer.style.display;
-        originalDisplay.gstBill = document.getElementById("gst-bill-container").style.display;
-        originalDisplay.manual = document.getElementById("manual-item-container").style.display;
-
-        // Show regular bill and hide others
-        billContainer.style.display = "block";
-        document.getElementById("gst-bill-container").style.display = "none";
-        document.getElementById("manual-item-container").style.display = "none";
-
-        // Hide columns for regular bill
-        hideTableColumn(document.getElementById("copyListManual"), 7, "none");
-        hideTableColumn(document.getElementById("copyListManual"), 6, "none");
+    // 2. Auto-Switch to Bill View if currently in Input View
+    let wasInputView = false;
+    if (currentView === 'input') {
+        toggleView();
+        wasInputView = true;
     }
 
-    const options = {
-        margin: [10, 10, 10, 10], // top, right, bottom, left
-        filename: `bill-${document.getElementById("billNo").value || 'document'}.pdf`,
+    // 3. Select the correct container
+    let element;
+    const filename = `bill-${document.getElementById("billNo").value || 'document'}.pdf`;
+
+    if (isGSTMode) {
+        element = document.getElementById("gst-bill-container");
+        if (currentView === 'input') {
+            // This part handles GST table columns if needed, though toggleView usually handles it
+            hideTableColumn(document.getElementById("gstCopyListManual"), 8, "none");
+            hideTableColumn(document.getElementById("gstCopyListManual"), 7, "none");
+        }
+    } else {
+        element = document.getElementById("bill-container");
+
+        // UPDATED: Only show Footer if the user has toggled it ON
+        const regFooter = document.getElementById('regular-bill-footer');
+        if (regFooter) {
+            if (isRegularFooterVisible) {
+                regFooter.style.display = 'table';
+                updateRegularFooterInfo(); // Ensure signatures are up to date
+            } else {
+                regFooter.style.display = 'none';
+            }
+        }
+    }
+
+    // 4. Configure Options
+    const opt = {
+        margin: [10, 10, 10, 10],
+        filename: filename,
         image: { type: 'jpeg', quality: 0.98 },
         html2canvas: {
-            scale: 2,
+            scale: 5,
+            dpi: 400,
             useCORS: true,
             logging: false,
-            scrollX: 0,
+            letterRendering: true,
             scrollY: 0
         },
-        jsPDF: {
-            unit: 'mm',
-            format: 'a4',
-            orientation: 'portrait'
-        },
-        // Improved page break handling - let content break naturally
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+
+        // Keep rows intact
         pagebreak: {
-            mode: ['css', 'avoid-all'],
-            before: '.force-page-break' // Only force break for specific elements
+            mode: ['css', 'legacy'],
+            avoid: ['tr', '.section-row', '.section-total-row', '.bill-footer']
         }
     };
 
-    html2pdf().from(containerToDownload).set(options).save().then(() => {
-        // Restore original display states
-        if (isGSTMode) {
-            document.getElementById("gst-bill-container").style.display = originalDisplay.gstBill;
-            document.getElementById("bill-container").style.display = originalDisplay.regularBill;
-            document.getElementById("manual-item-container").style.display = originalDisplay.manual;
+    // 5. Generate PDF
+    element.classList.add('pdf-mode');
 
-            // Show columns again for GST bill
-            if (currentView === 'input') {
-                hideTableColumn(document.getElementById("gstCopyListManual"), 8, "table-cell");
-                hideTableColumn(document.getElementById("gstCopyListManual"), 7, "table-cell");
-            }
-        } else {
-            document.getElementById("bill-container").style.display = originalDisplay.regularBill;
-            document.getElementById("gst-bill-container").style.display = originalDisplay.gstBill;
-            document.getElementById("manual-item-container").style.display = originalDisplay.manual;
+    html2pdf().set(opt).from(element).save().then(() => {
+        // Cleanup CSS class
+        element.classList.remove('pdf-mode');
 
-            // Show columns again for regular bill
-            if (currentView === 'input') {
-                hideTableColumn(document.getElementById("copyListManual"), 7, "table-cell");
+        // Restore Regular Footer Visibility (matches UI state)
+        if (!isGSTMode) {
+            const regFooter = document.getElementById('regular-bill-footer');
+            if (regFooter) {
+                regFooter.style.display = isRegularFooterVisible ? 'table' : 'none';
             }
-            hideTableColumn(document.getElementById("copyListManual"), 6, "table-cell");
+        }
+
+        // 6. Switch back to Input View if we auto-switched
+        if (wasInputView) {
+            toggleView();
         }
     });
 }
@@ -8079,17 +8068,27 @@ function updateTaxBreakdownTable(taxDataMap, taxableValue, cgst, sgst, igst) {
 
 function updateAmountInWords(amount) {
     // Add safety check to prevent errors with invalid amounts
-    if (isNaN(amount) || amount === 0) {
-        document.getElementById('bill-amount-words').textContent = 'Rupees Zero Only';
-        return;
+    let text = 'Rupees Zero Only';
+
+    if (!isNaN(amount) && amount !== 0) {
+        try {
+            const words = convertNumberToWords(amount);
+            text = `Rupees ${words} Only`;
+        } catch (error) {
+            console.error('Error converting amount to words:', error);
+        }
     }
 
-    try {
-        const words = convertNumberToWords(amount);
-        document.getElementById('bill-amount-words').textContent = `Rupees ${words} Only`;
-    } catch (error) {
-        console.error('Error converting amount to words:', error);
-        document.getElementById('bill-amount-words').textContent = 'Rupees Zero Only';
+    // Update GST Bill Words (Existing)
+    const gstWordsEl = document.getElementById('bill-amount-words');
+    if (gstWordsEl) {
+        gstWordsEl.textContent = text;
+    }
+
+    // Update Regular Bill Words (New Fix)
+    const regWordsEl = document.getElementById('reg-bill-amount-words');
+    if (regWordsEl) {
+        regWordsEl.textContent = text;
     }
 }
 
@@ -9481,7 +9480,7 @@ function updateSectionTotals() {
                 labelCell.style.textAlign = 'right';
                 labelCell.style.fontWeight = 'bold';
                 labelCell.style.paddingRight = '10px';
-                labelCell.textContent = `Total ${currentSectionName}:`;
+                labelCell.textContent = `Total :`;
 
                 const amountCell = document.createElement('td');
                 amountCell.style.textAlign = 'center';
@@ -9495,7 +9494,7 @@ function updateSectionTotals() {
                 if (tableId === 'createListManual' || tableId === 'gstCopyListManual') {
                     const emptyCell = document.createElement('td');
                     // FIX: Add class to target this cell for visibility toggling
-                    emptyCell.className = 'section-total-action-cell'; 
+                    emptyCell.className = 'section-total-action-cell';
                     totalRow.appendChild(emptyCell);
                 }
 
@@ -9510,7 +9509,7 @@ function updateSectionTotals() {
 
                 // Start new section
                 currentSectionId = row.getAttribute('data-section-id');
-                
+
                 // Safely get text node only (ignoring buttons)
                 const td = row.querySelector('td');
                 currentSectionName = '';
@@ -9842,6 +9841,7 @@ function saveSection() {
 
     // FIX: Recalculate totals immediately after saving
     updateSectionTotals();
+    applyColumnVisibility();
 }
 
 function createSectionInAllTablesFromSaved(sectionData) {
@@ -11724,7 +11724,7 @@ function applyColumnVisibility() {
             });
         }
     }
-    
+
     // Add padding to Particulars column when SR NO is hidden
     const srNoHidden = !document.getElementById('colSrNo').checked;
     const particularsHeaders = document.querySelectorAll('thead th:nth-child(2)');
@@ -11765,16 +11765,16 @@ function applyColumnVisibility() {
                     // Determine if Actions column is hidden in this table
                     let isActionColHidden = false;
                     let actionHeaderIndex = 6; // Default for input table (createListManual)
-                    
+
                     if (table.id === 'gstCopyListManual') actionHeaderIndex = 7;
-                    
+
                     const actionHeader = table.querySelector(`thead th:nth-child(${actionHeaderIndex + 1})`);
                     // If header exists and is hidden, OR header doesn't exist (some views), hide cell
                     if (actionHeader && actionHeader.style.display === 'none') {
                         isActionColHidden = true;
                     } else if (!actionHeader) {
                         // Fallback for tables where action header might be missing/removed in DOM
-                        isActionColHidden = true; 
+                        isActionColHidden = true;
                     }
 
                     if (isActionColHidden) {
