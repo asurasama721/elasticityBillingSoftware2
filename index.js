@@ -1786,15 +1786,19 @@ function openAddItemModal() {
     document.getElementById('add-item-modal-title').textContent = 'Add New Item';
     document.getElementById('save-item-btn').textContent = 'Save Item';
 
-    // Reset all fields
+    // Reset all fields including new ones
     document.getElementById('saved-item-name').value = '';
+    document.getElementById('saved-category').value = ''; // Reset
+    document.getElementById('saved-batch-number').value = ''; // Reset
+    document.getElementById('saved-section-code').value = ''; // Reset
+    
     document.getElementById('saved-stock-quantity').value = '0';
     document.getElementById('saved-dimension-type').value = 'none';
     document.getElementById('saved-measurement-unit').value = 'ft';
     document.getElementById('saved-default-quantity').value = '1';
     document.getElementById('saved-select-unit').value = '';
     document.getElementById('saved-default-rate').value = '';
-    // Removed checkbox reset
+    
     document.getElementById('saved-dimension1').value = '';
     document.getElementById('saved-dimension2').value = '';
     document.getElementById('saved-dimension3').value = '';
@@ -1806,6 +1810,11 @@ function openAddItemModal() {
     document.getElementById('saved-discount-value').value = '';
     document.getElementById('saved-other-names').value = '';
     document.getElementById('saved-notes').value = '';
+
+    // Reset toggles to checked
+    if(document.getElementById('saved-dimension1-toggle')) document.getElementById('saved-dimension1-toggle').checked = true;
+    if(document.getElementById('saved-dimension2-toggle')) document.getElementById('saved-dimension2-toggle').checked = true;
+    if(document.getElementById('saved-dimension3-toggle')) document.getElementById('saved-dimension3-toggle').checked = true;
 
     // Reset dimension inputs visibility
     handleSavedDimensionTypeChange();
@@ -1996,77 +2005,77 @@ async function debugStock() {
 }
 
 
-async function saveItem() {
-    const itemName = document.getElementById('saved-item-name').value.trim();
-    const dimensionType = document.getElementById('saved-dimension-type').value;
-    const measurementUnit = document.getElementById('saved-measurement-unit').value;
-    const defaultQuantity = parseFloat(document.getElementById('saved-default-quantity').value) || 1;
-    const defaultUnit = document.getElementById('saved-select-unit').value.trim();
-    const defaultRate = parseFloat(document.getElementById('saved-default-rate').value) || 0;
-    const showDimensions = document.getElementById('saved-show-dimensions').checked;
+// async function saveItem() {
+//     const itemName = document.getElementById('saved-item-name').value.trim();
+//     const dimensionType = document.getElementById('saved-dimension-type').value;
+//     const measurementUnit = document.getElementById('saved-measurement-unit').value;
+//     const defaultQuantity = parseFloat(document.getElementById('saved-default-quantity').value) || 1;
+//     const defaultUnit = document.getElementById('saved-select-unit').value.trim();
+//     const defaultRate = parseFloat(document.getElementById('saved-default-rate').value) || 0;
+//     const showDimensions = document.getElementById('saved-show-dimensions').checked;
 
-    // Get discount fields
-    const discountType = document.getElementById('saved-discount-type').value;
-    const discountValue = parseFloat(document.getElementById('saved-discount-value').value) || 0;
+//     // Get discount fields
+//     const discountType = document.getElementById('saved-discount-type').value;
+//     const discountValue = parseFloat(document.getElementById('saved-discount-value').value) || 0;
 
-    // Get HSN and product fields
-    const hsnCode = document.getElementById('saved-hsn-code').value.trim();
-    const stockQuantity = parseInt(document.getElementById('saved-stock-quantity').value) || 0;
-    const productCode = document.getElementById('saved-product-code').value.trim();
-    const purchaseRate = parseFloat(document.getElementById('saved-purchase-rate').value) || 0;
-    const otherNames = document.getElementById('saved-other-names').value.trim();
-    const notes = document.getElementById('saved-notes').value.trim();
+//     // Get HSN and product fields
+//     const hsnCode = document.getElementById('saved-hsn-code').value.trim();
+//     const stockQuantity = parseInt(document.getElementById('saved-stock-quantity').value) || 0;
+//     const productCode = document.getElementById('saved-product-code').value.trim();
+//     const purchaseRate = parseFloat(document.getElementById('saved-purchase-rate').value) || 0;
+//     const otherNames = document.getElementById('saved-other-names').value.trim();
+//     const notes = document.getElementById('saved-notes').value.trim();
 
-    // Get dimension values
-    const dimension1 = parseFloat(document.getElementById('saved-dimension1').value) || 0;
-    const dimension2 = parseFloat(document.getElementById('saved-dimension2').value) || 0;
-    const dimension3 = parseFloat(document.getElementById('saved-dimension3').value) || 0;
-    const dimensionValues = [dimension1, dimension2, dimension3];
+//     // Get dimension values
+//     const dimension1 = parseFloat(document.getElementById('saved-dimension1').value) || 0;
+//     const dimension2 = parseFloat(document.getElementById('saved-dimension2').value) || 0;
+//     const dimension3 = parseFloat(document.getElementById('saved-dimension3').value) || 0;
+//     const dimensionValues = [dimension1, dimension2, dimension3];
 
-    if (!itemName) {
-        showNotification('Please enter an item name');
-        return;
-    }
+//     if (!itemName) {
+//         showNotification('Please enter an item name');
+//         return;
+//     }
 
-    const itemData = {
-        name: itemName,
-        dimensionType: dimensionType,
-        measurementUnit: measurementUnit,
-        dimensionValues: dimensionValues,
-        defaultQuantity: defaultQuantity,
-        defaultUnit: defaultUnit,
-        defaultRate: defaultRate,
-        showDimensions: showDimensions,
-        // Add discount fields
-        discountType: discountType,
-        discountValue: discountValue,
-        // Add other fields
-        hsnCode: hsnCode,
-        stockQuantity: stockQuantity, // This should be saved
-        productCode: productCode,
-        purchaseRate: purchaseRate,
-        otherNames: otherNames,
-        notes: notes,
-        timestamp: Date.now()
-    };
+//     const itemData = {
+//         name: itemName,
+//         dimensionType: dimensionType,
+//         measurementUnit: measurementUnit,
+//         dimensionValues: dimensionValues,
+//         defaultQuantity: defaultQuantity,
+//         defaultUnit: defaultUnit,
+//         defaultRate: defaultRate,
+//         showDimensions: showDimensions,
+//         // Add discount fields
+//         discountType: discountType,
+//         discountValue: discountValue,
+//         // Add other fields
+//         hsnCode: hsnCode,
+//         stockQuantity: stockQuantity, // This should be saved
+//         productCode: productCode,
+//         purchaseRate: purchaseRate,
+//         otherNames: otherNames,
+//         notes: notes,
+//         timestamp: Date.now()
+//     };
 
-    // DEBUG: Log what we're saving
-    console.log('Saving item data:', itemData);
+//     // DEBUG: Log what we're saving
+//     console.log('Saving item data:', itemData);
 
-    try {
-        await setInDB('savedItems', itemName, itemData);
+//     try {
+//         await setInDB('savedItems', itemName, itemData);
 
-        // DEBUG: Verify it was saved
-        const savedItem = await getFromDB('savedItems', itemName);
-        console.log('Item saved to DB:', savedItem);
+//         // DEBUG: Verify it was saved
+//         const savedItem = await getFromDB('savedItems', itemName);
+//         console.log('Item saved to DB:', savedItem);
 
-        closeAddItemModal();
-        await loadItemsList();
-    } catch (error) {
-        console.error('Error saving item:', error);
-    }
-    await debugStock();
-}
+//         closeAddItemModal();
+//         await loadItemsList();
+//     } catch (error) {
+//         console.error('Error saving item:', error);
+//     }
+//     await debugStock();
+// }
 
 async function editItem(itemName) {
     try {
@@ -2078,13 +2087,16 @@ async function editItem(itemName) {
 
             // Populate fields
             document.getElementById('saved-item-name').value = item.name;
+            document.getElementById('saved-category').value = item.category || ''; // Populate
+            document.getElementById('saved-batch-number').value = item.batchNumber || ''; // Populate
+            document.getElementById('saved-section-code').value = item.sectionCode || ''; // Populate
+
             document.getElementById('saved-stock-quantity').value = item.stockQuantity || 0;
             document.getElementById('saved-dimension-type').value = item.dimensionType || 'none';
             document.getElementById('saved-measurement-unit').value = item.measurementUnit || 'ft';
             document.getElementById('saved-default-quantity').value = item.defaultQuantity || 1;
             document.getElementById('saved-select-unit').value = item.defaultUnit || '';
             document.getElementById('saved-default-rate').value = item.defaultRate || '';
-            // Removed checkbox population
 
             // Populate dimension values
             if (item.dimensionValues) {
@@ -2127,17 +2139,23 @@ async function editItem(itemName) {
 
 async function saveItem() {
     const itemName = document.getElementById('saved-item-name').value.trim();
+    // New Fields
+    const category = document.getElementById('saved-category').value.trim();
+    const batchNumber = document.getElementById('saved-batch-number').value.trim();
+    const sectionCode = document.getElementById('saved-section-code').value.trim();
+
     const dimensionType = document.getElementById('saved-dimension-type').value;
     const measurementUnit = document.getElementById('saved-measurement-unit').value;
     const defaultQuantity = parseFloat(document.getElementById('saved-default-quantity').value) || 1;
     const defaultUnit = document.getElementById('saved-select-unit').value.trim();
     const defaultRate = parseFloat(document.getElementById('saved-default-rate').value) || 0;
+    // Note: 'saved-show-dimensions' checkbox was removed from your HTML, removed here to prevent error
 
-    // Default showDimensions to true since checkbox is removed
-    const showDimensions = true;
-
+    // Get discount fields
     const discountType = document.getElementById('saved-discount-type').value;
     const discountValue = parseFloat(document.getElementById('saved-discount-value').value) || 0;
+
+    // Get HSN and product fields
     const hsnCode = document.getElementById('saved-hsn-code').value.trim();
     const stockQuantity = parseInt(document.getElementById('saved-stock-quantity').value) || 0;
     const productCode = document.getElementById('saved-product-code').value.trim();
@@ -2145,16 +2163,17 @@ async function saveItem() {
     const otherNames = document.getElementById('saved-other-names').value.trim();
     const notes = document.getElementById('saved-notes').value.trim();
 
+    // Get dimension values
     const dimension1 = parseFloat(document.getElementById('saved-dimension1').value) || 0;
     const dimension2 = parseFloat(document.getElementById('saved-dimension2').value) || 0;
     const dimension3 = parseFloat(document.getElementById('saved-dimension3').value) || 0;
     const dimensionValues = [dimension1, dimension2, dimension3];
 
-    // Capture toggle states
+    // Capture toggle states (if elements exist, otherwise default true)
     const toggleStates = {
-        toggle1: document.getElementById('saved-dimension1-toggle').checked,
-        toggle2: document.getElementById('saved-dimension2-toggle').checked,
-        toggle3: document.getElementById('saved-dimension3-toggle').checked
+        toggle1: document.getElementById('saved-dimension1-toggle') ? document.getElementById('saved-dimension1-toggle').checked : true,
+        toggle2: document.getElementById('saved-dimension2-toggle') ? document.getElementById('saved-dimension2-toggle').checked : true,
+        toggle3: document.getElementById('saved-dimension3-toggle') ? document.getElementById('saved-dimension3-toggle').checked : true
     };
 
     if (!itemName) {
@@ -2164,6 +2183,9 @@ async function saveItem() {
 
     const itemData = {
         name: itemName,
+        category: category,       // Saved
+        batchNumber: batchNumber, // Saved
+        sectionCode: sectionCode, // Saved
         dimensionType: dimensionType,
         measurementUnit: measurementUnit,
         dimensionValues: dimensionValues,
@@ -2171,17 +2193,19 @@ async function saveItem() {
         defaultQuantity: defaultQuantity,
         defaultUnit: defaultUnit,
         defaultRate: defaultRate,
-        showDimensions: showDimensions,
-        stockQuantity: stockQuantity,
         discountType: discountType,
         discountValue: discountValue,
         hsnCode: hsnCode,
+        stockQuantity: stockQuantity,
         productCode: productCode,
         purchaseRate: purchaseRate,
         otherNames: otherNames,
         notes: notes,
         timestamp: Date.now()
     };
+
+    // DEBUG: Log what we're saving
+    console.log('Saving item data:', itemData);
 
     try {
         // Handle renaming: if editing and name changed, delete old entry
@@ -2190,12 +2214,13 @@ async function saveItem() {
         }
 
         await setInDB('savedItems', itemName, itemData);
+
         closeAddItemModal();
         await loadItemsList();
-        showNotification('Item saved successfully', 'success');
     } catch (error) {
         console.error('Error saving item:', error);
     }
+    await debugStock();
 }
 
 // Batch Invoice Functions
@@ -2361,6 +2386,53 @@ async function reduceStockOnSave() {
         console.error('Error reducing stock:', error);
     }
 }
+// --- New UI Helper Functions ---
+
+// Toggle Details Visibility
+function toggleCardDetails(btn) {
+    // Find the parent card
+    const card = btn.closest('.item-card, .customer-card, .saved-bill-card');
+    // Find the details section within that card
+    const details = card.querySelector('.details-section');
+    const icon = btn.querySelector('.material-icons');
+
+    if (details.classList.contains('hidden')) {
+        // Show details
+        details.classList.remove('hidden');
+        icon.textContent = 'keyboard_arrow_down';
+    } else {
+        // Hide details
+        details.classList.add('hidden');
+        icon.textContent = 'keyboard_control_key';
+    }
+}
+
+// Toggle Action Menu
+function toggleActionMenu(event, menuId) {
+    event.stopPropagation(); // Prevent event bubbling
+    
+    // Close any other open menus first
+    closeAllActionMenus();
+    
+    const menu = document.getElementById(menuId);
+    if (menu) {
+        menu.classList.toggle('show');
+    }
+}
+
+// Close all menus (used when clicking outside)
+function closeAllActionMenus() {
+    document.querySelectorAll('.action-dropdown.show').forEach(menu => {
+        menu.classList.remove('show');
+    });
+}
+
+// Global listener to close menus when clicking anywhere else
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.action-menu-container')) {
+        closeAllActionMenus();
+    }
+});
 
 async function loadItemsList() {
     try {
@@ -2376,16 +2448,17 @@ async function loadItemsList() {
         items.forEach(item => {
             const itemCard = document.createElement('div');
             itemCard.className = 'item-card';
+            
+            // Create unique ID for the dropdown menu
+            const safeName = item.value.name.replace(/[^a-zA-Z0-9]/g, '-');
+            const menuId = `menu-item-${safeName}-${Date.now()}`;
 
             // 1. Handle Dimension Info & Unit
             let dimensionInfo = '';
             let unitInfo = '';
             if (item.value.dimensionType && item.value.dimensionType !== 'none') {
                 dimensionInfo += `<div>Dimension Type: ${item.value.dimensionType}</div>`;
-
-                // Only show Unit if dimensions are active
                 unitInfo = `<div>Measurement Unit: ${item.value.measurementUnit || 'ft'}</div>`;
-
                 if (item.value.dimensionValues) {
                     const [v1, v2, v3] = item.value.dimensionValues;
                     dimensionInfo += `<div>Dimension Values: ${v1}, ${v2}, ${v3}</div>`;
@@ -2398,34 +2471,62 @@ async function loadItemsList() {
                 stockInfo = `<div>Stock: ${item.value.stockQuantity}</div>`;
             }
 
-            // 3. Handle Discount (Hide if none)
+            // 3. Handle Discount
             let discountInfo = '';
             if (item.value.discountType && item.value.discountType !== 'none') {
                 discountInfo = `<div>Discount: ${item.value.discountType} - ${item.value.discountValue}</div>`;
             }
 
-            // 4. Handle Notes (Hide if None/Empty)
+            // 4. Handle Notes
             let notesInfo = '';
             if (item.value.notes && item.value.notes !== 'None' && item.value.notes.trim() !== '') {
                 notesInfo = `<div>Notes: ${item.value.notes}</div>`;
             }
 
-            // 5. Other Fields
+            // 5. New Fields (Category, Batch, Section)
+            let categoryInfo = item.value.category ? `<div>Category: ${item.value.category}</div>` : '';
+            let batchInfo = item.value.batchNumber ? `<div>Batch: ${item.value.batchNumber}</div>` : '';
+            let sectionInfo = item.value.sectionCode ? `<div>Section: ${item.value.sectionCode}</div>` : '';
+
+            // 6. Other Fields
             let otherNamesInfo = item.value.otherNames ? `<div>Other Names: ${item.value.otherNames}</div>` : '';
             let hsnInfo = item.value.hsnCode ? `<div>HSN/SAC: ${item.value.hsnCode}</div>` : '';
             let productCodeInfo = item.value.productCode ? `<div>Product Code: ${item.value.productCode}</div>` : '';
             let purchaseRateInfo = item.value.purchaseRate ? `<div>Purchase Rate: ₹${item.value.purchaseRate}</div>` : '';
 
+            // Header Structure: [Name] -> [Toggle] -> [Menu]
             itemCard.innerHTML = `
-                <div class="item-header">
-                    <div class="item-name">${item.value.name}</div>
-                    <div class="item-actions">
-                        <button class="btn-add-stock" onclick="openAddStockModal('${item.value.name}')">Add Stock</button>
-                        <button class="btn-edit" onclick="editItem('${item.value.name}')">Edit</button>
-                        <button class="btn-delete" onclick="deleteItem('${item.value.name}')">Delete</button>
+                <div class="card-header-row">
+                    <div class="card-info">${item.value.name}</div>
+                    
+                    <div class="card-controls">
+                        <button class="icon-btn" onclick="toggleCardDetails(this)" title="Toggle Details">
+                            <span class="material-icons">keyboard_control_key</span>
+                        </button>
+                        
+                        <div class="action-menu-container">
+                            <button class="icon-btn" onclick="toggleActionMenu(event, '${menuId}')">
+                                <span class="material-icons">more_vert</span>
+                            </button>
+                            <div id="${menuId}" class="action-dropdown">
+                                <button class="dropdown-item" onclick="openAddStockModal('${item.value.name}')">
+                                    <span class="material-icons">add_box</span> Add Stock
+                                </button>
+                                <button class="dropdown-item" onclick="editItem('${item.value.name}')">
+                                    <span class="material-icons">edit</span> Edit
+                                </button>
+                                <button class="dropdown-item delete-item" onclick="deleteItem('${item.value.name}')">
+                                    <span class="material-icons">delete</span> Delete
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="item-details">
+                
+                <div class="details-section hidden item-details">
+                    ${categoryInfo}
+                    ${batchInfo}
+                    ${sectionInfo}
                     ${dimensionInfo}
                     ${unitInfo}
                     <div>Default Quantity: ${item.value.defaultQuantity || 1}</div>
@@ -2452,8 +2553,14 @@ function searchItems() {
     const itemCards = document.querySelectorAll('.item-card');
 
     itemCards.forEach(card => {
-        const itemName = card.querySelector('.item-name').textContent.toLowerCase();
-        if (itemName.includes(searchTerm)) {
+        const nameEl = card.querySelector('.card-info');
+        const detailsEl = card.querySelector('.details-section');
+        
+        const itemName = nameEl ? nameEl.textContent.toLowerCase() : '';
+        // Since Category, Batch, and Section are added to detailsHtml, this search covers them!
+        const itemDetails = detailsEl ? detailsEl.textContent.toLowerCase() : '';
+
+        if (itemName.includes(searchTerm) || itemDetails.includes(searchTerm)) {
             card.style.display = 'block';
         } else {
             card.style.display = 'none';
@@ -2609,17 +2716,42 @@ async function loadCustomersList() {
         customers.forEach(customer => {
             const customerCard = document.createElement('div');
             customerCard.className = 'customer-card';
+            
+            const safeName = customer.value.name.replace(/[^a-zA-Z0-9]/g, '-');
+            const menuId = `menu-cust-${safeName}-${Date.now()}`;
+
             customerCard.innerHTML = `
-                <div class="customer-header">
-                    <div class="customer-name">${customer.value.name}</div>
-                    <div class="customer-actions">
-                        <button class="btn-payment" data-customer-name="${customer.value.name}" data-gstin="${customer.value.gstin || ''}">Payment & CN</button>
-                        <button class="btn-ledger" data-customer-name="${customer.value.name}" data-gstin="${customer.value.gstin || ''}">Ledger</button>
-                        <button class="btn-edit" onclick="editCustomer('${customer.value.name}')">Edit</button>
-                        <button class="btn-delete" onclick="deleteCustomer('${customer.value.name}')">Delete</button>
+                <div class="card-header-row">
+                    <div class="card-info">${customer.value.name}</div>
+                    
+                    <div class="card-controls">
+                        <button class="icon-btn" onclick="toggleCardDetails(this)" title="Toggle Details">
+                            <span class="material-icons">keyboard_control_key</span>
+                        </button>
+                        
+                        <div class="action-menu-container">
+                            <button class="icon-btn" onclick="toggleActionMenu(event, '${menuId}')">
+                                <span class="material-icons">more_vert</span>
+                            </button>
+                            <div id="${menuId}" class="action-dropdown">
+                                <button class="dropdown-item" onclick="openPaymentDialog('${customer.value.name}', '${customer.value.gstin || ''}')">
+                                    <span class="material-icons">payments</span> Payment & CN
+                                </button>
+                                <button class="dropdown-item" onclick="openLedgerDialog('${customer.value.name}', '${customer.value.gstin || ''}')">
+                                    <span class="material-icons">book</span> Ledger
+                                </button>
+                                <button class="dropdown-item" onclick="editCustomer('${customer.value.name}')">
+                                    <span class="material-icons">edit</span> Edit
+                                </button>
+                                <button class="dropdown-item delete-item" onclick="deleteCustomer('${customer.value.name}')">
+                                    <span class="material-icons">delete</span> Delete
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="customer-details-text">
+                
+                <div class="details-section hidden customer-details-text">
                     <div>Address: ${customer.value.address || 'Not provided'}</div>
                     <div>Phone: ${customer.value.phone || 'Not provided'}</div>
                     <div>GSTIN: ${customer.value.gstin || 'Not provided'}</div>
@@ -2638,8 +2770,11 @@ function searchCustomers() {
     const customerCards = document.querySelectorAll('#customers-list .customer-card');
 
     customerCards.forEach(card => {
-        const customerName = card.querySelector('.customer-name').textContent.toLowerCase();
-        const customerDetails = card.querySelector('.customer-details-text').textContent.toLowerCase();
+        const nameEl = card.querySelector('.card-info');
+        const detailsEl = card.querySelector('.details-section');
+
+        const customerName = nameEl ? nameEl.textContent.toLowerCase() : '';
+        const customerDetails = detailsEl ? detailsEl.textContent.toLowerCase() : '';
 
         if (customerName.includes(searchTerm) || customerDetails.includes(searchTerm)) {
             card.style.display = 'block';
@@ -2719,10 +2854,15 @@ function searchSavedBills() {
     const billCards = document.querySelectorAll('#saved-bills-list .saved-bill-card');
 
     billCards.forEach(card => {
-        const billTitle = card.querySelector('.saved-bill-title').textContent.toLowerCase();
-        const billDetails = card.querySelector('.saved-bill-details').textContent.toLowerCase();
+        const infoEl = card.querySelector('.card-info');
+        const subInfoEl = card.querySelector('.card-sub-info');
+        const detailsEl = card.querySelector('.details-section');
 
-        if (billTitle.includes(searchTerm) || billDetails.includes(searchTerm)) {
+        const billTitle = infoEl ? infoEl.textContent.toLowerCase() : '';
+        const billTotal = subInfoEl ? subInfoEl.textContent.toLowerCase() : '';
+        const billDetails = detailsEl ? detailsEl.textContent.toLowerCase() : '';
+
+        if (billTitle.includes(searchTerm) || billTotal.includes(searchTerm) || billDetails.includes(searchTerm)) {
             card.style.display = 'block';
         } else {
             card.style.display = 'none';
@@ -3044,49 +3184,49 @@ async function loadSavedBillsList() {
         savedBills.forEach(bill => {
             const billCard = document.createElement('div');
             billCard.className = 'saved-bill-card';
+            
+            const menuId = `menu-bill-${bill.id}-${Date.now()}`;
+            const billNo = bill.value.customer?.billNo || 'N/A';
+            const custName = bill.value.customer?.name || 'N/A';
+
+            // New Header: [Bill No] - [Customer] -> [Total] -> [Toggle] -> [Menu]
             billCard.innerHTML = `
-                <div class="saved-bill-header">
-                    <div class="saved-bill-title">${bill.value.title}</div>
-                    <div class="saved-bill-total">₹${bill.value.totalAmount}</div>
+                <div class="card-header-row">
+                    <div class="card-info">
+                        <span>${billNo} - ${custName}</span>
+                        <span class="card-sub-info" style="color:var(--primary-color)">₹${bill.value.totalAmount}</span>
+                    </div>
+                    
+                    <div class="card-controls">
+                        <button class="icon-btn" onclick="toggleCardDetails(this)" title="Toggle Details">
+                            <span class="material-icons">keyboard_control_key</span>
+                        </button>
+                        
+                        <div class="action-menu-container">
+                            <button class="icon-btn" onclick="toggleActionMenu(event, '${menuId}')">
+                                <span class="material-icons">more_vert</span>
+                            </button>
+                            <div id="${menuId}" class="action-dropdown">
+                                <button class="dropdown-item" onclick="downloadBillAsJson('${bill.id}', 'regular', event)">
+                                    <span class="material-icons">download</span> Download JSON
+                                </button>
+                                <button class="dropdown-item" onclick="editSavedBill('${bill.id}', 'regular', event)">
+                                    <span class="material-icons">edit</span> Edit
+                                </button>
+                                <button class="dropdown-item delete-item" onclick="deleteSavedBill('${bill.id}', 'regular', event)">
+                                    <span class="material-icons">delete</span> Delete
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div class="saved-bill-details">
+                
+                <div class="details-section hidden saved-bill-details">
                     <div>Date: ${bill.value.date}</div>
-                    <div>Customer: ${bill.value.customer?.name || 'N/A'}</div>
                     <div>Items: ${bill.value.items?.length || bill.value.itemCount || 0}</div>
-                </div>
-                <div class="saved-bill-actions">
-                    <button class="btn-download" onclick="downloadBillAsJson('${bill.id}', 'regular', event)">
-                        <i class="material-icons">download</i> Download
-                    </button>
-                    <button class="btn-edit" onclick="editSavedBill('${bill.id}', 'regular', event)">
-                        <i class="material-icons">edit</i> Edit
-                    </button>
-                    <button class="btn-delete" onclick="deleteSavedBill('${bill.id}', 'regular', event)">
-                        <i class="material-icons">delete</i> Delete
-                    </button>
+                    <div>Title: ${bill.value.title}</div>
                 </div>
             `;
-
-            billCard.addEventListener('click', async (e) => {
-                if (!e.target.closest('.saved-bill-actions')) {
-                    resetEditMode();
-
-                    // CLEAR CURRENT DATA FIRST
-                    await clearAllData(true);
-                    // SWITCH TO REGULAR MODE FOR REGULAR BILLS
-                    if (!isGSTMode) {
-                        loadSavedBill(bill.id);
-                    } else {
-                        // Switch to regular mode if in GST mode
-                        isGSTMode = false;
-                        updateUIForGSTMode();
-                        loadSavedBill(bill.id);
-                    }
-
-                    closeSavedBillsModal();
-                }
-            });
-
             billsList.appendChild(billCard);
         });
     } catch (error) {
@@ -3812,6 +3952,8 @@ function duplicateRow(rowId) {
         dimensionUnit,
         hsnCode,
         productCode,
+
+
         discountType,
         discountValue,
         true, // dimensionsVisible
@@ -3830,6 +3972,7 @@ function duplicateRow(rowId) {
     refreshCopyTableTotal(); // Ensure copy table total updates
     saveToLocalStorage();
     saveStateToHistory();
+    applyColumnVisibility();
 
     if (isGSTMode) {
         copyItemsToGSTBill(); // Ensure sync
@@ -8307,24 +8450,51 @@ async function loadGSTCustomersList() {
         customers.forEach(customer => {
             const customerCard = document.createElement('div');
             customerCard.className = 'customer-card';
+            
+            // Use ID for uniqueness as names might be duplicated
+            const menuId = `menu-gstcust-${customer.id}-${Date.now()}`;
+
             customerCard.innerHTML = `
-    <div class="customer-header">
-        <div class="customer-name">${customer.value.name}</div>
-        <div class="customer-actions">
-            <button class="btn-payment" data-customer-name="${customer.value.name}" data-gstin="${customer.value.gstin || ''}">Payment & Credit Note</button>
-            <button class="btn-ledger" data-customer-name="${customer.value.name}" data-gstin="${customer.value.gstin || ''}">Ledger</button>
-            <button class="btn-edit" onclick="editGSTCustomer('${customer.id}')">Edit</button>
-            <button class="btn-delete" onclick="deleteGSTCustomer('${customer.id}')">Delete</button>
-        </div>
-    </div>
-    <div class="customer-details-text">
-        <div>Address: ${customer.value.address || 'Not provided'}</div>
-        <div>Phone: ${customer.value.phone || customer.value.contact || 'Not provided'}</div>
-        <div>GSTIN: ${customer.value.gstin || 'Not provided'}</div>
-        <div>State: ${customer.value.state || 'Not provided'}, Code: ${customer.value.stateCode || 'Not provided'}</div>
-        <div>Email: ${customer.value.email || 'Not provided'}</div>
-    </div>
-`;
+                <div class="card-header-row">
+                    <div class="card-info">
+                        <span>${customer.value.name}</span>
+                        <span class="card-sub-info">${customer.value.gstin || 'No GSTIN'}</span>
+                    </div>
+                    
+                    <div class="card-controls">
+                        <button class="icon-btn" onclick="toggleCardDetails(this)" title="Toggle Details">
+                            <span class="material-icons">keyboard_control_key</span>
+                        </button>
+                        
+                        <div class="action-menu-container">
+                            <button class="icon-btn" onclick="toggleActionMenu(event, '${menuId}')">
+                                <span class="material-icons">more_vert</span>
+                            </button>
+                            <div id="${menuId}" class="action-dropdown">
+                                <button class="dropdown-item" onclick="openPaymentDialog('${customer.value.name}', '${customer.value.gstin || ''}')">
+                                    <span class="material-icons">payments</span> Payment & CN
+                                </button>
+                                <button class="dropdown-item" onclick="openLedgerDialog('${customer.value.name}', '${customer.value.gstin || ''}')">
+                                    <span class="material-icons">book</span> Ledger
+                                </button>
+                                <button class="dropdown-item" onclick="editGSTCustomer('${customer.id}')">
+                                    <span class="material-icons">edit</span> Edit
+                                </button>
+                                <button class="dropdown-item delete-item" onclick="deleteGSTCustomer('${customer.id}')">
+                                    <span class="material-icons">delete</span> Delete
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="details-section hidden customer-details-text">
+                    <div>Address: ${customer.value.address || 'Not provided'}</div>
+                    <div>Phone: ${customer.value.phone || customer.value.contact || 'Not provided'}</div>
+                    <div>State: ${customer.value.state || 'Not provided'} (${customer.value.stateCode || '-'})</div>
+                    <div>Email: ${customer.value.email || 'Not provided'}</div>
+                </div>
+            `;
             customersList.appendChild(customerCard);
         });
     } catch (error) {
@@ -8337,10 +8507,15 @@ function searchGSTCustomers() {
     const customerCards = document.querySelectorAll('#gst-customers-list .customer-card');
 
     customerCards.forEach(card => {
-        const customerName = card.querySelector('.customer-name').textContent.toLowerCase();
-        const customerDetails = card.querySelector('.customer-details-text').textContent.toLowerCase();
+        const nameEl = card.querySelector('.card-info');
+        const subInfoEl = card.querySelector('.card-sub-info');
+        const detailsEl = card.querySelector('.details-section');
 
-        if (customerName.includes(searchTerm) || customerDetails.includes(searchTerm)) {
+        const customerName = nameEl ? nameEl.textContent.toLowerCase() : '';
+        const gstin = subInfoEl ? subInfoEl.textContent.toLowerCase() : '';
+        const customerDetails = detailsEl ? detailsEl.textContent.toLowerCase() : '';
+
+        if (customerName.includes(searchTerm) || gstin.includes(searchTerm) || customerDetails.includes(searchTerm)) {
             card.style.display = 'block';
         } else {
             card.style.display = 'none';
@@ -8640,66 +8815,56 @@ async function loadGSTSavedBillsList() {
         savedBills.forEach(bill => {
             const billCard = document.createElement('div');
             billCard.className = 'saved-bill-card';
+            
+            const menuId = `menu-gstbill-${bill.id}-${Date.now()}`;
+            const invoiceNo = bill.value.invoiceDetails?.number || 'N/A';
+            const custName = bill.value.customer?.billTo?.name || 'N/A';
+            const gstin = bill.value.customer?.billTo?.gstin || 'No GSTIN';
+
+            // New Header: [Invoice] - [Customer] -> [GSTIN] -> [Total] -> [Toggle] -> [Menu]
             billCard.innerHTML = `
-                <div class="saved-bill-header">
-                    <div class="saved-bill-title">${bill.value.title}</div>
-                    <div class="saved-bill-total">₹${bill.value.totalAmount}</div>
+                <div class="card-header-row">
+                    <div class="card-info">
+                        <span>${invoiceNo} - ${custName}</span>
+                        <span class="card-sub-info">${gstin}</span>
+                        <span class="card-sub-info" style="color:var(--primary-color)">₹${bill.value.totalAmount}</span>
+                    </div>
+                    
+                    <div class="card-controls">
+                        <button class="icon-btn" onclick="toggleCardDetails(this)" title="Toggle Details">
+                            <span class="material-icons">keyboard_control_key</span>
+                        </button>
+                        
+                        <div class="action-menu-container">
+                            <button class="icon-btn" onclick="toggleActionMenu(event, '${menuId}')">
+                                <span class="material-icons">more_vert</span>
+                            </button>
+                            <div id="${menuId}" class="action-dropdown">
+                                <button class="dropdown-item" onclick="downloadBillAsJson('${bill.id}', 'gst', event)">
+                                    <span class="material-icons">download</span> Download JSON
+                                </button>
+                                <button class="dropdown-item" onclick="editSavedBill('${bill.id}', 'gst', event)">
+                                    <span class="material-icons">edit</span> Edit
+                                </button>
+                                <button class="dropdown-item delete-item" onclick="deleteSavedBill('${bill.id}', 'gst', event)">
+                                    <span class="material-icons">delete</span> Delete
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div class="saved-bill-details">
+                
+                <div class="details-section hidden saved-bill-details">
                     <div>Date: ${bill.value.date}</div>
-                    <div>Customer: ${bill.value.customer?.billTo?.name || 'N/A'}</div>
                     <div>Items: ${bill.value.items?.length || bill.value.itemCount || 0}</div>
                     <div>Type: ${bill.value.taxSettings?.transactionType || 'N/A'}</div>
                 </div>
-                <div class="saved-bill-actions">
-                    <button class="btn-download" onclick="downloadBillAsJson('${bill.id}', 'gst', event)">
-                        <i class="material-icons">download</i> Download
-                    </button>
-                    <button class="btn-edit" onclick="editSavedBill('${bill.id}', 'gst', event)">
-                        <i class="material-icons">edit</i> Edit
-                    </button>
-                    <button class="btn-delete" onclick="deleteSavedBill('${bill.id}', 'gst', event)">
-                        <i class="material-icons">delete</i> Delete
-                    </button>
-                </div>
             `;
-
-            billCard.addEventListener('click', async (e) => {
-                if (!e.target.closest('.saved-bill-actions')) {
-                    resetEditMode();
-
-                    // CLEAR CURRENT DATA FIRST
-                    await clearAllData(true);
-
-                    // SWITCH TO GST MODE FOR GST BILLS
-                    if (isGSTMode) {
-                        loadGSTSavedBill(bill.id);
-                    } else {
-                        // Switch to GST mode if in regular mode
-                        isGSTMode = true;
-                        updateUIForGSTMode();
-                        loadGSTSavedBill(bill.id);
-                    }
-
-                    closeSavedBillsModal();
-                    setTimeout(() => {
-                        copyItemsToGSTBill();
-                        updateGSTTaxCalculation();
-                        // updateGSTBillDisplay();
-                        // FIX: Reset columns after loading is complete
-                        resetColumnVisibility();
-                    }, 100);
-                }
-            });
-
             billsList.appendChild(billCard);
         });
-
     } catch (error) {
         console.error('Error loading GST saved bills:', error);
     }
-    updateColumnVisibility();
-    await saveToLocalStorage();
 }
 
 async function loadGSTSavedBill(billId) {
@@ -12444,8 +12609,9 @@ function createRestoredBillCard(bill) {
     billCard.className = 'saved-bill-card';
 
     const billData = bill.value || bill;
+    const menuId = `menu-restored-${bill.id}-${Date.now()}`;
 
-    // IMPROVED DETECTION FOR CARD DISPLAY
+    // IMPROVED DETECTION FOR CARD DISPLAY (Kept existing logic)
     let isGST = false;
     let billNo = 'No Number';
     let customerName = 'Unknown Customer';
@@ -12453,14 +12619,12 @@ function createRestoredBillCard(bill) {
 
     // Check for Regular bill structure first
     if (billData.customer && billData.customer.name && !billData.customer.billTo) {
-        // Regular bill
         isGST = false;
         billNo = billData.customer.billNo || 'No Number';
         customerName = billData.customer.name || 'Unknown Customer';
         date = billData.customer.date || 'Unknown';
     }
     else if (billData.customer && billData.customer.billNo && !billData.invoiceDetails) {
-        // Regular bill
         isGST = false;
         billNo = billData.customer.billNo || 'No Number';
         customerName = billData.customer.name || 'Unknown Customer';
@@ -12468,7 +12632,6 @@ function createRestoredBillCard(bill) {
     }
     // Then check for GST structure
     else if (billData.sourceType === 'gst' || billData.invoiceDetails || billData.gstCustomerData || billData.customer?.billTo) {
-        // GST bill
         isGST = true;
         billNo = billData.invoiceDetails?.number || billData.gstCustomerData?.invoiceNo || 'No Number';
         customerName = billData.customer?.billTo?.name || billData.gstCustomerData?.billTo?.name || 'Unknown Customer';
@@ -12485,27 +12648,43 @@ function createRestoredBillCard(bill) {
     const totalAmount = billData.totalAmount || '0.00';
     const itemCount = billData.itemCount || billData.items?.length || billData.tableStructure?.filter(item => item.type === 'item').length || 0;
 
+    // New UI Structure
     billCard.innerHTML = `
-        <div class="saved-bill-header">
-            <div class="saved-bill-title">${customerName} - ${billNo}</div>
-            <div class="saved-bill-total">₹${totalAmount}</div>
+        <div class="card-header-row">
+            <div class="card-info">
+                <span>${customerName} - ${billNo}</span>
+                <span class="card-sub-info" style="color:var(--primary-color)">₹${totalAmount}</span>
+            </div>
+            
+            <div class="card-controls">
+                <button class="icon-btn" onclick="toggleCardDetails(this)" title="Toggle Details">
+                    <span class="material-icons">keyboard_control_key</span>
+                </button>
+                
+                <div class="action-menu-container">
+                    <button class="icon-btn" onclick="toggleActionMenu(event, '${menuId}')">
+                        <span class="material-icons">more_vert</span>
+                    </button>
+                    <div id="${menuId}" class="action-dropdown">
+                        <button class="dropdown-item" onclick="downloadBillAsJson('${bill.id}', 'restored', event)">
+                            <span class="material-icons">download</span> Download JSON
+                        </button>
+                        <button class="dropdown-item" onclick="loadRestoredBill('${bill.id}', event)">
+                            <span class="material-icons">open_in_browser</span> Load
+                        </button>
+                        <button class="dropdown-item delete-item" onclick="deleteRestoredBill('${bill.id}', event)">
+                            <span class="material-icons">delete</span> Delete
+                        </button>
+                    </div>
+                </div>
+            </div>
         </div>
-        <div class="saved-bill-details">
+        
+        <div class="details-section hidden saved-bill-details">
             <div>Date: ${date}</div>
             <div>Customer: ${customerName}</div>
             <div>Items: ${itemCount}</div>
             <div>Type: ${isGST ? 'GST' : 'Regular'} • Restored</div>
-        </div>
-        <div class="saved-bill-actions">
-            <button class="btn-download" onclick="downloadBillAsJson('${bill.id}', 'restored', event)">
-                <i class="material-icons">download</i> Download
-            </button>
-            <button class="btn-load" onclick="loadRestoredBill('${bill.id}', event)">
-                <i class="material-icons">open_in_browser</i> Load
-            </button>
-            <button class="btn-delete" onclick="deleteRestoredBill('${bill.id}', event)">
-                <i class="material-icons">delete</i> Delete
-            </button>
         </div>
     `;
 
@@ -12588,10 +12767,15 @@ function searchRestoredBills() {
     const billCards = document.querySelectorAll('#restored-bills-list .saved-bill-card');
 
     billCards.forEach(card => {
-        const billTitle = card.querySelector('.saved-bill-title').textContent.toLowerCase();
-        const billDetails = card.querySelector('.saved-bill-details').textContent.toLowerCase();
+        const infoEl = card.querySelector('.card-info');
+        const subInfoEl = card.querySelector('.card-sub-info');
+        const detailsEl = card.querySelector('.details-section');
 
-        if (billTitle.includes(searchTerm) || billDetails.includes(searchTerm)) {
+        const billTitle = infoEl ? infoEl.textContent.toLowerCase() : '';
+        const billTotal = subInfoEl ? subInfoEl.textContent.toLowerCase() : '';
+        const billDetails = detailsEl ? detailsEl.textContent.toLowerCase() : '';
+
+        if (billTitle.includes(searchTerm) || billTotal.includes(searchTerm) || billDetails.includes(searchTerm)) {
             card.style.display = 'block';
         } else {
             card.style.display = 'none';
