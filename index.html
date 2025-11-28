@@ -644,25 +644,41 @@
         <div class="modal-content" style="max-width: 600px;">
             <div class="modal-header">
                 <h3 id="add-item-modal-title">Add New Item</h3>
-                <span class="close" onclick="closeAddItemModal()">&times;</span>
+                <span class="close" onclick="closeAddItemModal()">×</span>
             </div>
             <div class="modal-body">
                 <div class="form-group">
                     <label>Item Name:</label>
                     <input type="text" id="saved-item-name" placeholder="Enter item name">
                 </div>
-                <!-- stock input -->
+
+                <div class="form-group">
+                    <label>Category:</label>
+                    <input type="text" id="saved-category" placeholder="Enter category (e.g., Electronics, Hardware)">
+                </div>
+
                 <div class="form-group">
                     <label>Stock Quantity:</label>
                     <input type="number" id="saved-stock-quantity" placeholder="Enter stock quantity" step="1" min="0"
                         value="0">
                 </div>
-                <!-- Product Code -->
+
+                <div class="form-row" style="display: flex; gap: 15px;">
+                    <div class="form-group" style="flex: 1;">
+                        <label>Batch Number:</label>
+                        <input type="text" id="saved-batch-number" placeholder="Enter batch no.">
+                    </div>
+                    <div class="form-group" style="flex: 1;">
+                        <label>Section Code:</label>
+                        <input type="text" id="saved-section-code" placeholder="Enter section/rack code">
+                    </div>
+                </div>
+
                 <div class="form-group">
                     <label>Product Code:</label>
                     <input type="text" id="saved-product-code" placeholder="Enter product code">
                 </div>
-                <!-- HSN and Product Code Fields -->
+
                 <div class="form-group">
                     <label>HSN/SAC Code:</label>
                     <input type="text" id="saved-hsn-code" placeholder="Enter HSN/SAC code">
@@ -673,7 +689,6 @@
                     <input type="number" id="saved-purchase-rate" placeholder="Enter purchase rate" step="0.01" min="0">
                 </div>
 
-                <!-- Discount Inputs -->
                 <div class="form-group">
                     <label>Discount Type:</label>
                     <select id="saved-discount-type">
@@ -693,14 +708,12 @@
 
                 <div class="form-group">
                     <label>Dimension Type:</label>
-                    <!-- Find the saved-dimension-type select in add-item-modal and update options: -->
                     <select id="saved-dimension-type" onchange="handleSavedDimensionTypeChange()">
                         <option value="none">Select Dimension</option>
                         <option value="length">Length</option>
                         <option value="widthXheight">Width X Height</option>
                         <option value="widthXheightXdepth">Width X Height X Depth</option>
                         <option value="dozen">Dozen (n/12)</option>
-                        <!-- NEW OPTIONS -->
                         <option value="lengthXwidthXheight">Length X Width X Height</option>
                         <option value="widthXdepth">Width X Depth</option>
                         <option value="lengthXheightXdepth">Length X Height X Depth</option>
@@ -723,7 +736,6 @@
                     </select>
                 </div>
 
-                <!-- Dimension Inputs -->
                 <div class="form-group" id="saved-dimension-inputs" style="display: none;">
                     <label>Dimension Values:</label>
                     <div class="dimension-inputs-group">
@@ -777,20 +789,22 @@
                     <label>Default Rate:</label>
                     <input type="number" id="saved-default-rate" placeholder="Enter default rate" step="0.01" min="0">
                 </div>
-                <!-- Other Names Input -->
+
                 <div class="form-group">
                     <label>Other Names (comma separated):</label>
                     <textarea id="saved-other-names" placeholder="Enter other names separated by commas"
                         rows="2"></textarea>
                 </div>
 
-                <!-- Notes Input -->
                 <div class="form-group">
                     <label>Notes:</label>
                     <textarea id="saved-notes" placeholder="Enter notes" rows="3"></textarea>
                 </div>
+            </div>
 
-                <div class="form-actions">
+            <div class="modal-footer"
+                style="position: sticky; bottom: 0; background: #fff; z-index: 10; border-top: 1px solid #ddd;">
+                <div class="form-actions" style="margin-top: 0; padding-top: 0; border-top: none;">
                     <button onclick="closeAddItemModal()" class="btn-cancel">Cancel</button>
                     <button onclick="saveItem()" class="btn-apply" id="save-item-btn">Save Item</button>
                 </div>
