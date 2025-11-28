@@ -361,7 +361,8 @@ body.gst-mode #tools button:hover .material-icons {
     width: 100%;
 }
 
-#gst-bill-container .bill-footer td, #regular-bill-footer td {
+#gst-bill-container .bill-footer td,
+#regular-bill-footer td {
     padding: 3px 5px;
 }
 
@@ -383,7 +384,8 @@ body.gst-mode #tools button:hover .material-icons {
 }
 
 /* Company signatory */
-#bill-company-signatory,#reg-bill-company-signatory {
+#bill-company-signatory,
+#reg-bill-company-signatory {
     font-size: 0.85em;
     margin: 0;
     padding: 0;
@@ -807,9 +809,12 @@ body.gst-mode #tools button:hover .material-icons {
 }
 
 .customer-suggestions {
-    position: absolute; /* <--- Changed from sticky */
-    top: 100%;          /* <--- Added: Puts it directly below input */
-    left: 0;            /* <--- Added: Aligns left */
+    position: absolute;
+    /* <--- Changed from sticky */
+    top: 100%;
+    /* <--- Added: Puts it directly below input */
+    left: 0;
+    /* <--- Added: Aligns left */
     background: white;
     border: 1px solid var(--border-color);
     border-radius: 4px;
@@ -818,8 +823,10 @@ body.gst-mode #tools button:hover .material-icons {
     z-index: 1000;
     width: 100%;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    margin-top: 2px;    /* <--- Added: Tiny gap for visuals */
+    margin-top: 2px;
+    /* <--- Added: Tiny gap for visuals */
 }
+
 .customer-suggestion-item {
     padding: 8px 12px;
     cursor: pointer;
@@ -1593,7 +1600,8 @@ input:checked+.toggle-slider:before {
 
 /* In style.css, add these styles */
 .section-total-row td {
-    background-color: #f8f8f8; /* Very light variant of the section color */
+    background-color: #f8f8f8;
+    /* Very light variant of the section color */
     /* border-top: 1px dashed #aaa !important;
     border-bottom: 2px solid #ddd !important; */
     color: #333;
@@ -2760,8 +2768,7 @@ tr[data-id] .dimensions span[style*="color: red"] {
     border: 1px solid #999;
     padding: 8px;
     vertical-align: top;
-    text-align: center
-    ;
+    text-align: center;
 }
 
 .unified-ledger-table th {
@@ -3057,10 +3064,13 @@ terms modal
 #toggleConvertBtn {
     transition: all 0.3s ease;
 }
+
 #toggleConvertBtn.active {
-    background-color: #8e44ad !important; /* Purple to distinguish it */
+    background-color: #8e44ad !important;
+    /* Purple to distinguish it */
     color: white;
 }
+
 #convertUnit {
     border: 1px solid var(--secondary-color);
     background-color: #f0f0f0;
@@ -3090,7 +3100,8 @@ terms modal
 
 /* Visual Taxable Row Style */
 .taxable-row td {
-    background-color: #fcf8e3; /* Light yellow */
+    background-color: #fcf8e3;
+    /* Light yellow */
     color: #8a6d3b;
     font-size: 0.9em;
     font-style: italic;
@@ -3106,9 +3117,18 @@ terms modal
     padding: 2px 5px;
     color: #666;
 }
-.adj-action-btn:hover { color: #333; }
-.adj-action-btn.edit { color: #f39c12; }
-.adj-action-btn.remove { color: #e74c3c; }
+
+.adj-action-btn:hover {
+    color: #333;
+}
+
+.adj-action-btn.edit {
+    color: #f39c12;
+}
+
+.adj-action-btn.remove {
+    color: #e74c3c;
+}
 
 
 /* [ADD TO END OF style.css] */
@@ -3123,19 +3143,23 @@ terms modal
 }
 
 #bill-total-table td {
-    padding: 5px 10px !important; /* Overrides the 15px global padding */
-    border: none !important;      /* specific clean look for totals */
+    padding: 5px 10px !important;
+    /* Overrides the 15px global padding */
+    border: none !important;
+    /* specific clean look for totals */
 }
 
 /* Force Right Alignment for the Label Column (Sub Total, Discount, etc.) */
 #bill-total-table td[colspan="5"] {
     text-align: right !important;
-    padding-right: 20px !important; /* Add spacing between label and amount */
+    padding-right: 20px !important;
+    /* Add spacing between label and amount */
 }
 
 /* Force Alignment for the Amount Column */
 #bill-total-table td:last-child {
-    text-align: center !important; /* Enforce center as per your HTML structure */
+    text-align: center !important;
+    /* Enforce center as per your HTML structure */
     width: 20% !important;
     white-space: nowrap;
 }
@@ -3151,13 +3175,15 @@ terms modal
 
 /* Fix width for Adjustment Modal Inputs */
 #adjustment-modal .form-row .form-group {
-    margin-bottom: 0; /* Let the row gap handle spacing */
+    margin-bottom: 0;
+    /* Let the row gap handle spacing */
 }
 
-#adjustment-modal select, 
-#adjustment-modal input[type="number"], 
+#adjustment-modal select,
+#adjustment-modal input[type="number"],
 #adjustment-modal input[type="text"] {
-    height: 38px; /* Consistent height for alignment */
+    height: 38px;
+    /* Consistent height for alignment */
 }
 
 /* [ADD TO END OF style.css] */
@@ -3176,22 +3202,25 @@ terms modal
 /* Tablet / Small Laptop */
 @media (max-width: 1024px) {
     #main-container {
-        zoom: 0.9; /* 90% scale */
+        zoom: 0.9;
+        /* 90% scale */
     }
 }
 
 /* Large Mobile / Small Tablet */
 @media (max-width: 768px) {
     #main-container {
-        zoom: 0.75; /* 75% scale */
-        flex-direction: column; /* Ensure items stack vertically */
+        zoom: 0.75;
+        /* 75% scale */
+        flex-direction: column;
+        /* Ensure items stack vertically */
     }
-    
+
     /* Ensure full width when stacked */
-    #bill-container, 
-    #gst-bill-container, 
+    #bill-container,
+    #gst-bill-container,
     #manual-item-container {
-        max-width: 100% !important; 
+        max-width: 100% !important;
         min-width: 100% !important;
     }
 }
@@ -3199,7 +3228,8 @@ terms modal
 /* Small Mobile */
 @media (max-width: 350px) {
     #main-container {
-        zoom: 0.6; /* 60% scale */
+        zoom: 0.6;
+        /* 60% scale */
     }
 }
 
@@ -3208,6 +3238,7 @@ terms modal
    FINAL ROBUST PRINT STYLES (Fixes Row Splitting)
    ============================================================ */
 @media print {
+
     /* 1. Page Setup */
     @page {
         margin: 10mm;
@@ -3224,7 +3255,7 @@ terms modal
 
     /* 2. Container Handling */
     #main-container,
-    #bill-container, 
+    #bill-container,
     #gst-bill-container,
     .list-of-items {
         display: block !important;
@@ -3253,13 +3284,14 @@ terms modal
         /* Force row to stay together */
         page-break-inside: avoid !important;
         break-inside: avoid !important;
-        
+
         /* Ensure browser treats it as an atomic block */
-        display: table-row !important; 
+        display: table-row !important;
     }
 
     /* Add buffer to cells to prevent tight cuts */
-    td, th {
+    td,
+    th {
         padding-top: 4px !important;
         padding-bottom: 4px !important;
         page-break-inside: avoid !important;
@@ -3276,33 +3308,45 @@ terms modal
 
     /* 6. Bill Footer Section (Bank details etc) */
     .bill-footer {
-        page-break-inside: avoid !important; /* Try to keep footer together */
+        page-break-inside: avoid !important;
+        /* Try to keep footer together */
         break-inside: avoid !important;
         width: 100% !important;
         margin-top: 20px !important;
-        display: table !important; /* Ensure it behaves like a table for breaking */
+        display: table !important;
+        /* Ensure it behaves like a table for breaking */
     }
 
     /* 7. Hide UI Elements */
-    #tools, 
-    #settings-sidebar, 
-    #settings-overlay, 
-    #manual-item-container, 
-    .modal, 
+    #tools,
+    #settings-sidebar,
+    #settings-overlay,
+    #manual-item-container,
+    .modal,
     .notification-container,
     #reg-footer-btn,
-    .add-payment-form, 
+    .add-payment-form,
     .payment-dialog,
     .ledger-dialog {
         display: none !important;
     }
 
     /* 8. Visibility Logic */
-    #gst-bill-container { display: none !important; }
-    #bill-container { display: block !important; }
+    #gst-bill-container {
+        display: none !important;
+    }
 
-    body.gst-mode #bill-container { display: none !important; }
-    body.gst-mode #gst-bill-container { display: block !important; }
+    #bill-container {
+        display: block !important;
+    }
+
+    body.gst-mode #bill-container {
+        display: none !important;
+    }
+
+    body.gst-mode #gst-bill-container {
+        display: block !important;
+    }
 
 
 
@@ -3313,4 +3357,128 @@ terms modal
         padding: 0 !important;
         margin: 0 !important;
     }
+}
+
+/* --- Card UI Overhaul --- */
+.card-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    /* Aligns top for multi-line text */
+    width: 100%;
+    position: relative;
+    /* Context for dropdown */
+}
+
+.card-info {
+    flex: 1;
+    font-weight: bold;
+    font-size: 1.1em;
+    padding-right: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.card-sub-info {
+    font-size: 0.85em;
+    color: #666;
+    font-weight: normal;
+}
+
+.card-controls {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+}
+
+/* Icon Buttons */
+.icon-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #555;
+    transition: background 0.2s;
+}
+
+.icon-btn:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+    color: var(--primary-color);
+}
+
+.icon-btn .material-icons {
+    font-size: 24px;
+}
+
+/* Action Dropdown Menu */
+.action-menu-container {
+    position: relative;
+}
+
+.action-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background: white;
+    border-radius: 4px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    border: 1px solid #eee;
+    z-index: 100;
+    min-width: 160px;
+    display: none;
+    /* Hidden by default */
+    flex-direction: column;
+    padding: 5px 0;
+}
+
+.action-dropdown.show {
+    display: flex;
+}
+
+.dropdown-item {
+    background: none;
+    border: none;
+    text-align: left;
+    padding: 10px 15px;
+    width: 100%;
+    cursor: pointer;
+    font-size: 14px;
+    color: #333;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.dropdown-item:hover {
+    background-color: #f5f5f5;
+}
+
+.dropdown-item .material-icons {
+    font-size: 18px;
+    color: #666;
+}
+
+.dropdown-item.delete-item {
+    color: #e74c3c;
+}
+
+.dropdown-item.delete-item .material-icons {
+    color: #e74c3c;
+}
+
+/* Details Section visibility */
+.details-section {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #eee;
+}
+
+.details-section.hidden {
+    display: none;
 }
